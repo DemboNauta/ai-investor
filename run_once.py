@@ -57,6 +57,10 @@ def main(profile_key: str = "moderate"):
     portfolio["last_run"] = datetime.now(timezone.utc).isoformat()
     pf.save(portfolio, profile["portfolio_file"])
 
+    value_after = pf.get_total_value(portfolio, prices)
+    pnl = value_after - INITIAL_CAPITAL_EUR
+    pnl_pct = (pnl / INITIAL_CAPITAL_EUR) * 100
+
     # Append to history for chart
     import json as _json, os as _os
     _hist_file = f"history_{profile_key}.json"
@@ -64,10 +68,6 @@ def main(profile_key: str = "moderate"):
     _hist.append({"ts": portfolio["last_run"], "cycle": cycle, "value": round(value_after, 2)})
     with open(_hist_file, "w") as _f:
         _json.dump(_hist, _f)
-
-    value_after = pf.get_total_value(portfolio, prices)
-    pnl = value_after - INITIAL_CAPITAL_EUR
-    pnl_pct = (pnl / INITIAL_CAPITAL_EUR) * 100
 
     print(f"Total: €{value_after:.2f} | P&L: €{pnl:+.2f} ({pnl_pct:+.1f}%)")
     for t in trade_log:
