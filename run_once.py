@@ -110,12 +110,12 @@ def main(profile_key: str = "moderate"):
             )
             mem.prune_after_summarization(profile_memory)
             for s in summaries:
-                mem.add_entry(profile_memory, s["content"], "summary", cycle, 3)
-            print(f"  [{profile['name']}] Summarized into {len(summaries)} entries")
+                mem.add_summary(profile_memory, s["content"], cycle)
+            print(f"  [{profile['name']}] Summarized into {len(summaries)} core lessons")
         except Exception as e:
             print(f"  [{profile['name']}] Summarization error: {e}")
 
-    mem.save(profile_key, profile_memory)
+    mem.save(profile_key, profile_memory, profile_name=profile["name"])
 
     notifier.notify_cycle(
         cycle=cycle,
