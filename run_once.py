@@ -37,12 +37,12 @@ def main(profile_key: str = "moderate"):
 
     print(f"Running agent (cycle #{portfolio['cycle_count']})...")
     try:
-        portfolio, trade_log, summary = agent.run_cycle(
+        portfolio, trade_log, summary, activity_log = agent.run_cycle(
             portfolio, market_text, prices, system_prompt=profile["system_prompt"]
         )
     except Exception as e:
         traceback.print_exc()
-        trade_log, summary = [], f"Agent error: {e}"
+        trade_log, summary, activity_log = [], f"Agent error: {e}", []
 
     portfolio["last_run"] = datetime.now(timezone.utc).isoformat()
     pf.save(portfolio, profile["portfolio_file"])
@@ -61,6 +61,7 @@ def main(profile_key: str = "moderate"):
         cycle=portfolio["cycle_count"],
         trade_log=trade_log,
         agent_summary=summary,
+        activity_log=activity_log,
         total_eur=total,
         pnl_eur=pnl,
         pnl_pct=pnl_pct,

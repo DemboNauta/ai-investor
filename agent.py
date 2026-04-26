@@ -98,8 +98,8 @@ TOOLS = [
 ]
 
 
-def run_cycle(portfolio: dict, market_text: str, prices: dict[str, float], system_prompt: str = None) -> tuple[dict, list[str], str]:
-    """Run one trading cycle. Returns updated portfolio, trade log, agent summary."""
+def run_cycle(portfolio: dict, market_text: str, prices: dict[str, float], system_prompt: str = None) -> tuple[dict, list[str], str, list[dict]]:
+    """Run one trading cycle. Returns updated portfolio, trade log, agent summary, activity log."""
     portfolio_text = pf.format_portfolio_for_llm(portfolio, prices)
     user_msg = f"{portfolio_text}\n\n{market_text}\n\nAnalyze the market and execute trades. Call done() when finished."
 
@@ -110,6 +110,7 @@ def run_cycle(portfolio: dict, market_text: str, prices: dict[str, float], syste
     ]
 
     trade_log = []
+    activity_log = []  # all tool calls with args + result
     summary = ""
     max_iterations = 20
 
@@ -138,6 +139,7 @@ def run_cycle(portfolio: dict, market_text: str, prices: dict[str, float], syste
                 summary = args.get("summary", "")
                 finished = True
                 result = "Cycle complete."
+                activity_log.append({"tool": "done", "args": args, "result": result, "status": "ok"})
 
             elif fn == "buy":
                 coin_id = args["coin_id"]
@@ -147,13 +149,25 @@ def run_cycle(portfolio: dict, market_text: str, prices: dict[str, float], syste
 
                 if price is None:
                     result = f"ERROR: unknown coin '{coin_id}' — not in market data"
+                    status = "error"
                 elif amount_eur < MIN_TRADE_EUR:
                     result = f"ERROR: minimum trade is €{MIN_TRADE_EUR}"
+                    status = "error"
                 else:
-                    ok, msg_str = pf.buy(portfolio, coin_id, amount_eur, price)
-                    result = msg_str
+                    ok, result = pf.buy(portfolio, coin_id, amount_eur, price)
+                    status = "ok" if ok else "error"
                     if ok:
                         trade_log.append(f"BUY  {coin_id:<15} €{amount_eur:.2f} — {reasoning}")
+
+                activity_log.append({
+                    "tool": "buy",
+                    "coin_id": coin_id,
+                    "amount_eur": amount_eur,
+                    "price": price,
+                    "reasoning": reasoning,
+                    "result": result,
+                    "status": status,
+                })
 
             elif fn == "sell":
                 coin_id = args["coin_id"]
@@ -163,14 +177,26 @@ def run_cycle(portfolio: dict, market_text: str, prices: dict[str, float], syste
 
                 if price is None:
                     result = f"ERROR: unknown coin '{coin_id}'"
+                    status = "error"
                 else:
-                    ok, msg_str = pf.sell(portfolio, coin_id, amount_eur, price)
-                    result = msg_str
+                    ok, result = pf.sell(portfolio, coin_id, amount_eur, price)
+                    status = "ok" if ok else "error"
                     if ok:
                         trade_log.append(f"SELL {coin_id:<15} €{amount_eur:.2f} — {reasoning}")
 
+                activity_log.append({
+                    "tool": "sell",
+                    "coin_id": coin_id,
+                    "amount_eur": amount_eur,
+                    "price": price,
+                    "reasoning": reasoning,
+                    "result": result,
+                    "status": status,
+                })
+
             else:
                 result = f"unknown tool: {fn}"
+                activity_log.append({"tool": fn, "args": args, "result": result, "status": "error"})
 
             tool_results.append({
                 "role": "tool",
@@ -183,4 +209,4 @@ def run_cycle(portfolio: dict, market_text: str, prices: dict[str, float], syste
         if finished:
             break
 
-    return portfolio, trade_log, summary
+    return portfolio, trade_log, summary, activity_log
