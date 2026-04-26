@@ -8,6 +8,7 @@ import portfolio as pf
 import agent
 import memory as mem
 import notifier
+import generate_report
 from config import INITIAL_CAPITAL_EUR
 from profiles import PROFILES
 
@@ -55,6 +56,14 @@ def main(profile_key: str = "moderate"):
 
     portfolio["last_run"] = datetime.now(timezone.utc).isoformat()
     pf.save(portfolio, profile["portfolio_file"])
+
+    # Append to history for chart
+    import json as _json, os as _os
+    _hist_file = f"history_{profile_key}.json"
+    _hist = _json.load(open(_hist_file)) if _os.path.exists(_hist_file) else []
+    _hist.append({"ts": portfolio["last_run"], "cycle": cycle, "value": round(value_after, 2)})
+    with open(_hist_file, "w") as _f:
+        _json.dump(_hist, _f)
 
     value_after = pf.get_total_value(portfolio, prices)
     pnl = value_after - INITIAL_CAPITAL_EUR
@@ -128,6 +137,11 @@ def main(profile_key: str = "moderate"):
         cash_eur=portfolio["cash_eur"],
         profile_name=profile["name"],
     )
+    try:
+        generate_report.generate()
+    except Exception as e:
+        print(f"  [report] Error: {e}")
+
     print("Done.")
 
 
