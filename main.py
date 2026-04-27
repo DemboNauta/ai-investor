@@ -36,7 +36,7 @@ def run_cycle(next_run: datetime) -> datetime:
 
     console.print(f"[cyan]Running Grok agent (cycle #{portfolio['cycle_count']})...[/cyan]")
     try:
-        portfolio, trade_log, summary = agent.run_cycle(portfolio, market_text, prices)
+        portfolio, trade_log, summary, _activity_log, _memories = agent.run_cycle(portfolio, market_text, prices)
     except Exception as e:
         console.print(f"[red]Agent error: {e}[/red]")
         traceback.print_exc()

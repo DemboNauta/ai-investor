@@ -27,28 +27,54 @@ def main(profile_key: str = "moderate"):
         coins = market_data.get_market_data(limit=50)
         coins = market_data.enrich_with_indicators(coins)
         fear_greed = market_data.get_fear_greed()
+        global_mkt = market_data.get_global_market()
+        trending = market_data.get_trending()
+        funding_rates = market_data.get_funding_rates()
+        macro = market_data.get_macro_context()
     except Exception as e:
         print(f"Market data error: {e}")
         return
 
     prices = {c["id"]: c["current_price"] for c in coins}
-    market_text = market_data.format_market_data_for_llm(coins, fear_greed)
+    market_text = market_data.format_market_data_for_llm(
+        coins, fear_greed,
+        global_market=global_mkt,
+        trending=trending,
+        funding_rates=funding_rates,
+        macro=macro,
+    )
 
     portfolio = pf.load(profile["portfolio_file"])
     portfolio["cycle_count"] += 1
     cycle = portfolio["cycle_count"]
 
-    # Load memory and inject into system prompt
+    # Load memory
     profile_memory = mem.load(profile_key)
-    memory_prompt = mem.format_for_prompt(profile_memory)
+
+    # Compute current regime for smart memory injection
+    fg_val = fear_greed.get("value") if fear_greed else None
+    btcd = global_mkt.get("btc_dominance") if global_mkt else None
+    mcap_chg = global_mkt.get("market_cap_change_24h_pct") if global_mkt else None
+    current_regime_label = mem._classify_regime(fg_val, btcd, mcap_chg)
+    current_regime = {"label": current_regime_label, "fear_greed": fg_val, "btc_dominance": btcd}
+
+    # Compute per-coin trade stats from portfolio history
+    coin_stats = mem.compute_coin_stats(portfolio.get("trades", []))
+
+    memory_prompt = mem.format_for_prompt(
+        profile_memory,
+        current_regime=current_regime,
+        coin_stats=coin_stats,
+        current_cycle=cycle,
+    )
     full_system_prompt = profile["system_prompt"] + memory_prompt
 
     value_before = pf.get_total_value(portfolio, prices)
 
-    print(f"Running agent (cycle #{cycle})...")
+    print(f"Running agent (cycle #{cycle}, regime={current_regime_label})...")
     try:
         portfolio, trade_log, summary, activity_log, in_cycle_memories = agent.run_cycle(
-            portfolio, market_text, prices, system_prompt=full_system_prompt
+            portfolio, market_text, prices, system_prompt=full_system_prompt, mem=profile_memory
         )
     except Exception as e:
         traceback.print_exc()
@@ -75,9 +101,12 @@ def main(profile_key: str = "moderate"):
     if summary:
         print(f"Agent: {summary}")
 
-    # Save in-cycle memories (logged during trading)
+    # Save in-cycle memories (logged during trading) — tagged with current regime
     for m in in_cycle_memories:
-        mem.add_entry(profile_memory, m["content"], m["category"], cycle, m["importance"])
+        mem.add_entry(
+            profile_memory, m["content"], m["category"], cycle, m["importance"],
+            regime=current_regime_label, fear_greed=fg_val, btc_dominance=btcd,
+        )
     if in_cycle_memories:
         print(f"  [{profile['name']}] {len(in_cycle_memories)} in-cycle memory/memories saved")
 
@@ -98,7 +127,8 @@ def main(profile_key: str = "moderate"):
         for m in reflection_memories:
             mem.add_entry(
                 profile_memory, m["content"], m["category"], cycle,
-                m["importance"], pnl_pct=delta_pct
+                m["importance"], pnl_pct=delta_pct,
+                regime=current_regime_label, fear_greed=fg_val, btc_dominance=btcd,
             )
         if reflection_memories:
             print(f"  [{profile['name']}] {len(reflection_memories)} reflection memory/memories saved")
@@ -138,7 +168,7 @@ def main(profile_key: str = "moderate"):
         profile_name=profile["name"],
     )
     try:
-        generate_report.generate()
+        generate_report.generate(prices=prices)
     except Exception as e:
         print(f"  [report] Error: {e}")
 

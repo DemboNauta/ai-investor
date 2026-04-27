@@ -2,6 +2,7 @@ import json
 from openai import OpenAI
 from config import XAI_API_KEY, XAI_BASE_URL, MODEL, MIN_TRADE_EUR
 import portfolio as pf
+import data as market_data
 
 client = OpenAI(api_key=XAI_API_KEY, base_url=XAI_BASE_URL)
 
@@ -25,7 +26,86 @@ STRATEGY TIPS:
 - Diversify: don't put everything in one coin.
 - Cut losers early, let winners run.
 - Alt coins = higher risk/reward than BTC/ETH.
+
+USING ENRICHED CONTEXT:
+- MACRO: DXY rising = headwind for crypto. SPY falling = risk-off, reduce exposure.
+- GLOBAL MARKET: Market cap falling >1% (RISK-OFF) = reduce exposure. Rising >1% (RISK-ON) = more aggressive.
+- BTC DOMINANCE: >55% = prefer BTC/ETH over alts. <45% = alt season, alts can outperform.
+- TRENDING: Trending coins often see volume spikes in 12-24h. Check if tradeable, assess entry carefully.
+- FUNDING RATES (FR): >+0.1%/8h = longs overextended, dump likely. <-0.05% = shorts overextended, squeeze likely. Near 0 = healthy.
+- BB%B: <0.2 = price near lower band (potential buy). >0.8 = near upper band (potential sell/avoid).
+- MACDh%: Positive and rising = momentum building. Negative and falling = momentum dying. Zero cross = trend change signal.
+
+TOOLS AVAILABLE:
+- fetch_news([keyword]): Get latest crypto headlines. Call before big trades or when uncertain about macro.
+- get_coin_details(coin_id): Deep due diligence — dev activity, community, exchange listings. Use before large positions.
 """.format(min_trade=MIN_TRADE_EUR)
+
+_UPDATE_THESIS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "update_thesis",
+        "description": (
+            "Update your persistent market thesis — your current macro view that carries over to the next cycle. "
+            "Call this when your market outlook changes meaningfully. Be concise and specific: "
+            "include regime (bull/bear/sideways), key levels, and what you expect next."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "thesis": {
+                    "type": "string",
+                    "description": "Your updated market thesis (1-3 sentences max)."
+                }
+            },
+            "required": ["thesis"]
+        }
+    }
+}
+
+_FETCH_NEWS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "fetch_news",
+        "description": (
+            "Fetch recent crypto news headlines from Coindesk and Cointelegraph. "
+            "Call this when you want to check sentiment, find catalysts, or assess risk before trading. "
+            "Optionally filter by keyword (e.g. 'bitcoin', 'ethereum', 'regulation', 'ETF')."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "filter_keyword": {
+                    "type": "string",
+                    "description": "Optional keyword to filter headlines (case-insensitive). Leave empty for all news."
+                }
+            },
+            "required": []
+        }
+    }
+}
+
+_GET_COIN_DETAILS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_coin_details",
+        "description": (
+            "Get detailed on-chain and market data for a specific coin: developer activity, "
+            "community stats, exchange listings, description, categories, and more. "
+            "Use before a large trade when you want deeper due diligence."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "coin_id": {
+                    "type": "string",
+                    "description": "CoinGecko coin ID (e.g. 'bitcoin', 'ethereum', 'solana')."
+                }
+            },
+            "required": ["coin_id"]
+        }
+    }
+}
 
 _REMEMBER_TOOL = {
     "type": "function",
@@ -141,6 +221,9 @@ TOOLS = [
         }
     },
     _REMEMBER_TOOL,
+    _FETCH_NEWS_TOOL,
+    _GET_COIN_DETAILS_TOOL,
+    _UPDATE_THESIS_TOOL,
 ]
 
 REFLECTION_TOOLS = [_REMEMBER_TOOL, _DONE_REFLECTING_TOOL]
@@ -151,6 +234,7 @@ def run_cycle(
     market_text: str,
     prices: dict[str, float],
     system_prompt: str = None,
+    mem: dict = None,
 ) -> tuple[dict, list[str], str, list[dict], list[dict]]:
     """Run one trading cycle. Returns updated portfolio, trade log, agent summary, activity log, in-cycle memories."""
     portfolio_text = pf.format_portfolio_for_llm(portfolio, prices)
@@ -248,6 +332,14 @@ def run_cycle(
                     "status": status,
                 })
 
+            elif fn == "update_thesis":
+                thesis = args.get("thesis", "").strip()
+                if mem is not None:
+                    import memory as _mem
+                    _mem.update_thesis(mem, thesis)
+                result = f"Thesis updated: {thesis}"
+                activity_log.append({"tool": "update_thesis", "args": args, "result": result, "status": "ok"})
+
             elif fn == "remember":
                 in_cycle_memories.append({
                     "content": args["content"],
@@ -256,6 +348,47 @@ def run_cycle(
                 })
                 result = "Memory saved."
                 activity_log.append({"tool": "remember", "args": args, "result": result, "status": "ok"})
+
+            elif fn == "fetch_news":
+                keyword = args.get("filter_keyword", "").strip().lower()
+                headlines = market_data.get_crypto_news(max_items=15)
+                if keyword:
+                    headlines = [h for h in headlines if keyword in h.lower()]
+                if headlines:
+                    result = "RECENT NEWS:\n" + "\n".join(f"• {h}" for h in headlines)
+                else:
+                    result = f"No news found{' for keyword: ' + keyword if keyword else ''}."
+                activity_log.append({"tool": "fetch_news", "args": args, "result": f"{len(headlines)} headlines", "status": "ok"})
+
+            elif fn == "get_coin_details":
+                coin_id = args["coin_id"]
+                try:
+                    import requests as _req
+                    resp = _req.get(
+                        f"https://api.coingecko.com/api/v3/coins/{coin_id}",
+                        params={"localization": "false", "tickers": "false", "community_data": "true", "developer_data": "true"},
+                        timeout=15,
+                    )
+                    resp.raise_for_status()
+                    d = resp.json()
+                    desc = (d.get("description", {}).get("en") or "")[:400].replace("\r\n", " ")
+                    cats = ", ".join((d.get("categories") or [])[:5])
+                    dev = d.get("developer_data", {})
+                    comm = d.get("community_data", {})
+                    result = (
+                        f"COIN: {d.get('name')} ({d.get('symbol', '').upper()})\n"
+                        f"Description: {desc}...\n"
+                        f"Categories: {cats}\n"
+                        f"GitHub stars: {dev.get('stars', 'n/a')} | Forks: {dev.get('forks', 'n/a')} | "
+                        f"Commits 4w: {dev.get('commit_count_4_weeks', 'n/a')}\n"
+                        f"Twitter followers: {comm.get('twitter_followers', 'n/a')} | "
+                        f"Reddit subscribers: {comm.get('reddit_subscribers', 'n/a')}\n"
+                        f"Exchange listings: {len(d.get('tickers') or [])}"
+                    )
+                    activity_log.append({"tool": "get_coin_details", "coin_id": coin_id, "result": "ok", "status": "ok"})
+                except Exception as e:
+                    result = f"ERROR fetching details for '{coin_id}': {e}"
+                    activity_log.append({"tool": "get_coin_details", "coin_id": coin_id, "result": result, "status": "error"})
 
             else:
                 result = f"unknown tool: {fn}"

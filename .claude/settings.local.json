@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import data, agent; print\\('OK'\\)\")",
+      "Bash(python generate_report.py)"
+    ]
+  }
+}
