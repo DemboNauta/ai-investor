@@ -930,6 +930,7 @@ header {
   padding: 3px 8px;
   z-index: 10;
 }
+.header-subscribe .subscribe-msg:empty { display: none; }
 
 .header-ts {
   text-align: right;
