@@ -571,7 +571,7 @@ def _chart_script(histories: dict) -> str:
   const allTimestamps = {timestamps_json};
   const allDatasets   = {datasets_json};
 
-  let currentWindow = 168; // default 1W
+  let currentWindow = 24; // default 1D
 
   // Aggregate raw hourly data to one point per day (last value of day)
   function aggregateDaily(cycles, timestamps, rawDatasets, sliceN) {{
@@ -2167,8 +2167,8 @@ def generate(prices: dict = None):
     <div class="section-label" style="margin-bottom:0">Evolución del portfolio (€ por ciclo)</div>
     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
       <div class="chart-time-filters">
-        <button class="time-btn" onclick="filterChart(24)">1D</button>
-        <button class="time-btn active" onclick="filterChart(168)">1W</button>
+        <button class="time-btn active" onclick="filterChart(24)">1D</button>
+        <button class="time-btn" onclick="filterChart(168)">1W</button>
         <button class="time-btn" onclick="filterChart(720)">1M</button>
         <button class="time-btn" onclick="filterChart(null)">ALL</button>
       </div>

@@ -25,11 +25,11 @@ def _make_client(provider: str):
 PYTHON = r"C:\Users\edgar\AppData\Local\Programs\Python\Python310\python.exe"
 
 _ALERT_STATE_FILE = os.path.join(os.path.dirname(__file__), "alert_state.json")
-_ALERT_COOLDOWN_H = 6   # horas mínimas entre alertas urgentes
-_BIG_TRADE_EUR    = 120  # trade >= €120 = alerta
-_BIG_MOVE_PCT     = 7    # cambio >= 7% en un ciclo = alerta
-_FG_EXTREME_LOW   = 20
-_FG_EXTREME_HIGH  = 80
+_ALERT_COOLDOWN_H = 24   # horas mínimas entre alertas urgentes
+_BIG_MOVE_PCT     = 20   # cambio >= 20% en portfolio en un ciclo = alerta
+_FG_EXTREME_LOW   = 15   # miedo extremo real
+_FG_EXTREME_HIGH  = 85   # codicia extrema real
+_BTC_CRASH_PCT    = 15   # BTC sube/baja >= 15% en 24h = alerta
 
 
 def _last_alert_ts() -> datetime | None:
@@ -58,6 +58,7 @@ def _maybe_send_alert(
     trade_log: list,
     activity_log: list,
     pnl_pct: float,
+    coins: list | None = None,
 ):
     # Check cooldown
     last = _last_alert_ts()
@@ -67,27 +68,34 @@ def _maybe_send_alert(
             return
 
     # Check conditions
-    fg_val    = fear_greed.get("value") if fear_greed else None
-    fg_label  = fear_greed.get("value_classification", "") if fear_greed else ""
+    fg_val     = fear_greed.get("value") if fear_greed else None
+    fg_label   = fear_greed.get("value_classification", "") if fear_greed else ""
     fg_extreme = fg_val is not None and (fg_val < _FG_EXTREME_LOW or fg_val > _FG_EXTREME_HIGH)
-    big_trade  = any(
-        a.get("amount_eur", 0) >= _BIG_TRADE_EUR
-        for a in activity_log if a.get("tool") in ("buy", "sell")
-    )
-    delta_pct  = abs((value_after - value_before) / value_before * 100) if value_before else 0
-    big_move   = delta_pct >= _BIG_MOVE_PCT
 
-    if not (fg_extreme or big_trade or big_move):
+    delta_pct = abs((value_after - value_before) / value_before * 100) if value_before else 0
+    big_move  = delta_pct >= _BIG_MOVE_PCT
+
+    btc_24h = None
+    btc_crash = False
+    if coins:
+        btc = next((c for c in coins if c["id"] == "bitcoin"), None)
+        if btc:
+            btc_24h = btc.get("price_change_percentage_24h_in_currency")
+            if btc_24h is not None and abs(btc_24h) >= _BTC_CRASH_PCT:
+                btc_crash = True
+
+    if not (fg_extreme or big_move or btc_crash):
         return
 
     reasons = []
     if fg_extreme:
         direction = "Miedo extremo" if fg_val < _FG_EXTREME_LOW else "Codicia extrema"
         reasons.append(f"{direction} (F&G: {fg_val} — {fg_label})")
-    if big_trade:
-        reasons.append(f"Trade significativo (≥€{_BIG_TRADE_EUR})")
     if big_move:
-        reasons.append(f"Movimiento de ciclo: {delta_pct:.1f}%")
+        reasons.append(f"Portfolio: {delta_pct:.1f}% en 1 ciclo")
+    if btc_crash:
+        sign = "+" if btc_24h > 0 else ""
+        reasons.append(f"BTC 24h: {sign}{btc_24h:.1f}%")
 
     reason = " · ".join(reasons)
     recipients = subscribers.get_all()
@@ -273,6 +281,7 @@ def main(profile_key: str = "moderate"):
             trade_log=trade_log,
             activity_log=activity_log,
             pnl_pct=pnl_pct,
+            coins=coins,
         )
     except Exception as e:
         print(f"  [alert] Error: {e}")

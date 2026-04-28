@@ -2,17 +2,23 @@
 
 ## Qué es
 
-Sistema de paper trading crypto con 3 agentes autónomos (Grok-3 vía xAI API).
-Cada agente gestiona un portfolio de €1000 con estrategia distinta.
+Sistema de paper trading crypto con **6 agentes autónomos** divididos en 2 equipos que compiten entre sí:
+- **Equipo Grok**: 3 agentes con Grok 4.1 fast reasoning (xAI API)
+- **Equipo GPT**: 3 agentes con GPT-4o mini (OpenAI API)
+
+Mismas estrategias en ambos equipos. Se compara qué modelo toma mejores decisiones.
 Corre en VPS Linux 24/7. Dashboard web público en producción.
 
 ## Agentes / Perfiles
 
-| Key | Nombre | Estrategia | Portfolio file |
-|-----|--------|-----------|----------------|
-| `moderate` | Moderate | Conservador, top 10 coins, max 25% por coin | `portfolio_moderate.json` |
-| `aggressive` | Aggressive | Agresivo, top 50 coins, max 40% por coin | `portfolio_aggressive.json` |
-| `degen` | Degen | Extremo, alta concentración, FOMO válido | `portfolio_degen.json` |
+| Key | Nombre | Modelo | Estrategia | Portfolio file |
+|-----|--------|--------|-----------|----------------|
+| `moderate` | Moderate | Grok 4.1 | Conservador, top 10 coins, max 25% por coin | `portfolio_moderate.json` |
+| `aggressive` | Aggressive | Grok 4.1 | Agresivo, top 50 coins, max 40% por coin | `portfolio_aggressive.json` |
+| `degen` | Degen | Grok 4.1 | Extremo, alta concentración, FOMO válido | `portfolio_degen.json` |
+| `moderate_openai` | Moderate (GPT) | GPT-4o mini | Conservador, top 10 coins, max 25% por coin | `portfolio_moderate_openai.json` |
+| `aggressive_openai` | Aggressive (GPT) | GPT-4o mini | Agresivo, top 50 coins, max 40% por coin | `portfolio_aggressive_openai.json` |
+| `degen_openai` | Degen (GPT) | GPT-4o mini | Extremo, alta concentración, FOMO válido | `portfolio_degen_openai.json` |
 
 Capital inicial: **€1000** por agente.
 
@@ -63,6 +69,9 @@ chat_server.py (puerto 5001, arranca @reboot vía cron)
 0  * * * *  run_once.py moderate
 5  * * * *  run_once.py aggressive
 10 * * * *  run_once.py degen
+15 * * * *  run_once.py moderate_openai
+20 * * * *  run_once.py aggressive_openai
+25 * * * *  run_once.py degen_openai
 @reboot     api_server.py
 0 18 * * *  daily_digest.py
 0  3 * * *  backup.sh
@@ -92,7 +101,9 @@ Logs en `/root/ai-investor/logs/`.
 ## Datos persistentes en VPS (NO tocar/sobrescribir)
 
 - `portfolio_moderate.json` / `portfolio_aggressive.json` / `portfolio_degen.json`
+- `portfolio_moderate_openai.json` / `portfolio_aggressive_openai.json` / `portfolio_degen_openai.json`
 - `history_moderate.json` / `history_aggressive.json` / `history_degen.json`
+- `history_moderate_openai.json` / `history_aggressive_openai.json` / `history_degen_openai.json`
 - `memory_moderate.md` / `memory_aggressive.md` / `memory_degen.md`
 - `chat_history.db` (SQLite — historial de chats)
 - `subscribers.db` (SQLite — suscriptores email)
@@ -120,7 +131,9 @@ Logs en `/root/ai-investor/logs/`.
 
 ```
 XAI_API_KEY=...          # xAI / Grok API key
-GROK_MODEL=grok-3        # Modelo usado
+GROK_MODEL=grok-4.1-fast-reasoning  # Modelo Grok usado
+OPENAI_API_KEY=...       # OpenAI API key
+OPENAI_MODEL=gpt-4o-mini # Modelo OpenAI usado
 CYCLE_INTERVAL_HOURS=1   # Intervalo ciclos (no usado en prod con cron)
 RESEND_API_KEY=...       # Resend SDK — envío de emails
 FROM_EMAIL=noreply@send.cryptoaiarena.com
@@ -139,7 +152,8 @@ WEB_DIR=...              # Directorio output HTML (default: web/)
 - **Binance Futures** — funding rates
 - **Yahoo Finance** — DXY y S&P 500 (contexto macro)
 - **Coindesk + Cointelegraph** — noticias vía RSS
-- **xAI Grok-3** — modelo de decisión
+- **xAI Grok 4.1 fast reasoning** — modelo de decisión equipo Grok
+- **OpenAI GPT-4o mini** — modelo de decisión equipo GPT
 
 ## Acceso remoto al VPS
 
