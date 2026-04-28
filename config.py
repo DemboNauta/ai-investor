@@ -5,7 +5,11 @@ load_dotenv()
 
 XAI_API_KEY = os.getenv("XAI_API_KEY")
 XAI_BASE_URL = "https://api.x.ai/v1"
-MODEL = os.getenv("GROK_MODEL", "grok-3")
+MODEL = os.getenv("GROK_MODEL", "grok-4-1-fast-reasoning")
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_BASE_URL = "https://api.openai.com/v1"
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 INITIAL_CAPITAL_EUR = 1000.0
 CYCLE_INTERVAL_HOURS = float(os.getenv("CYCLE_INTERVAL_HOURS", "1"))

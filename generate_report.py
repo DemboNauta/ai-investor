@@ -16,9 +16,30 @@ WEB_DIR = os.getenv("WEB_DIR", os.path.join(os.path.dirname(__file__), "web"))
 INITIAL_CAPITAL_EUR = 1000.0
 os.makedirs(WEB_DIR, exist_ok=True)
 
-CRON_MINUTE = {"moderate": 0, "aggressive": 5, "degen": 10}
-ACCENT  = {"moderate": "#00d4ff", "aggressive": "#ffb800", "degen": "#ff3366"}
-RISK_LABEL = {"moderate": "BAJO RIESGO", "aggressive": "ALTO RIESGO", "degen": "EXTREMO"}
+CRON_MINUTE = {
+    "moderate": 0, "aggressive": 5, "degen": 10,
+    "moderate_openai": 15, "aggressive_openai": 20, "degen_openai": 25,
+}
+ACCENT = {
+    "moderate": "#00d4ff", "aggressive": "#ffb800", "degen": "#ff3366",
+    "moderate_openai": "#00d4ff", "aggressive_openai": "#ffb800", "degen_openai": "#ff3366",
+}
+RISK_LABEL = {
+    "moderate": "BAJO RIESGO", "aggressive": "ALTO RIESGO", "degen": "EXTREMO",
+    "moderate_openai": "BAJO RIESGO", "aggressive_openai": "ALTO RIESGO", "degen_openai": "EXTREMO",
+}
+PROVIDER_LABEL = {
+    "xai": "Grok 4.1 fast reasoning", "openai": "GPT-4o mini",
+}
+PROVIDER_COLOR = {
+    "xai": "#00d4ff", "openai": "#10b981",
+}
+# Base key → (grok_key, openai_key)
+STRATEGY_PAIRS = [
+    ("moderate", "moderate_openai"),
+    ("aggressive", "aggressive_openai"),
+    ("degen", "degen_openai"),
+]
 CATEGORY_COLOR = {
     "insight": "#00d4ff", "error": "#ff4466", "strategy": "#a78bfa",
     "market_pattern": "#ffb800", "lesson": "#00ff87", "summary": "#555570",
@@ -36,7 +57,8 @@ DATA_SOURCES = [
     {"icon": "🏦", "name": "Binance Futures", "desc": "Funding rates — posicionamiento del mercado de futuros", "url": "binance.com/futures"},
     {"icon": "📈", "name": "Yahoo Finance", "desc": "DXY (dólar) y S&P 500 — contexto macro", "url": "finance.yahoo.com"},
     {"icon": "📰", "name": "Coindesk + Cointelegraph", "desc": "Noticias crypto vía RSS (sin API key)", "url": "coindesk.com"},
-    {"icon": "🤖", "name": "xAI Grok", "desc": "Modelo de decisión — analiza todo lo anterior y ejecuta trades", "url": "x.ai"},
+    {"icon": "🤖", "name": "xAI Grok", "desc": "Equipo Grok: 3 agentes (Moderate / Aggressive / Degen)", "url": "x.ai"},
+    {"icon": "⚡", "name": "OpenAI GPT-4o mini", "desc": "Equipo GPT: 3 agentes con mismas estrategias que Grok", "url": "openai.com"},
 ]
 
 
@@ -256,8 +278,11 @@ def _memory_entries(entries: list) -> str:
 
 
 def _profile_card(key: str, profile: dict, prices: dict) -> str:
-    accent = ACCENT.get(key, "#888")
-    risk   = RISK_LABEL.get(key, key.upper())
+    accent   = ACCENT.get(key, "#888")
+    risk     = RISK_LABEL.get(key, key.upper())
+    provider = profile.get("provider", "xai")
+    prov_lbl = PROVIDER_LABEL.get(provider, provider)
+    prov_col = PROVIDER_COLOR.get(provider, "#888")
     p = _load_portfolio(profile["portfolio_file"])
     m = mem.load(key)
 
@@ -285,7 +310,8 @@ def _profile_card(key: str, profile: dict, prices: dict) -> str:
     thesis     = m.get("thesis", "")
     coin_stats = mem.compute_coin_stats(p.get("trades", []))
 
-    cron_min = CRON_MINUTE.get(key, 0)
+    cron_min     = CRON_MINUTE.get(key, 0)
+    provider_badge = f'<span class="provider-badge" style="background:{prov_col}18;color:{prov_col};border-color:{prov_col}40">{html_module.escape(prov_lbl)}</span>'
 
     tab_portfolio = f"""
         <div class="stats-row">
@@ -351,7 +377,7 @@ def _profile_card(key: str, profile: dict, prices: dict) -> str:
     return f"""<div class="card card-{key}" data-cron-minute="{cron_min}">
       <div class="card-header">
         <div>
-          <div class="card-name" style="color:{accent}">{html_module.escape(profile['name'])}</div>
+          <div class="card-name" style="color:{accent}">{html_module.escape(profile['name'])} {provider_badge}</div>
           <div class="card-cycle">ciclo #{cycle} · {last_run_str} · próximo <span class="next-cycle">--:--</span></div>
         </div>
         <div class="risk-badge" style="background:{accent}18;color:{accent};border:1px solid {accent}40">{risk}</div>
@@ -369,6 +395,83 @@ def _profile_card(key: str, profile: dict, prices: dict) -> str:
         <div class="tab-panel" id="tc-{key}">{tab_chat}</div>
       </div>
     </div>"""
+
+
+def _comparison_scoreboard(prices: dict) -> str:
+    rows = []
+    grok_total_pnl = 0.0
+    gpt_total_pnl  = 0.0
+
+    strategy_names = {"moderate": "Moderate", "aggressive": "Aggressive", "degen": "Degen"}
+
+    for base, openai_key in STRATEGY_PAIRS:
+        pg  = _load_portfolio(PROFILES[base]["portfolio_file"])
+        po  = _load_portfolio(PROFILES[openai_key]["portfolio_file"])
+
+        def _val(p):
+            cash = p.get("cash_eur", 0)
+            inv  = sum(pos["amount"] * prices.get(cid, 0) for cid, pos in p.get("holdings", {}).items())
+            return cash + inv
+
+        vg = _val(pg)
+        vo = _val(po)
+        pnl_g = vg - INITIAL_CAPITAL_EUR
+        pnl_o = vo - INITIAL_CAPITAL_EUR
+        grok_total_pnl += pnl_g
+        gpt_total_pnl  += pnl_o
+
+        pct_g = (pnl_g / INITIAL_CAPITAL_EUR) * 100
+        pct_o = (pnl_o / INITIAL_CAPITAL_EUR) * 100
+
+        cls_g = "pos" if pnl_g >= 0 else "neg"
+        cls_o = "pos" if pnl_o >= 0 else "neg"
+
+        if pg.get("cycle_count", 0) == 0 and po.get("cycle_count", 0) == 0:
+            leader_html = '<span class="vs-pending">pendiente</span>'
+        elif pnl_g > pnl_o:
+            leader_html = '<span class="vs-winner grok-winner">GROK ↑</span>'
+        elif pnl_o > pnl_g:
+            leader_html = '<span class="vs-winner gpt-winner">GPT ↑</span>'
+        else:
+            leader_html = '<span class="vs-tie">EMPATE</span>'
+
+        rows.append(f"""<div class="sb-row">
+          <span class="sb-strategy">{strategy_names[base]}</span>
+          <span class="sb-val {cls_g}">{_eur(pnl_g)} <span class="sb-pct">({_pct(pct_g)})</span></span>
+          {leader_html}
+          <span class="sb-val {cls_o}">{_eur(pnl_o)} <span class="sb-pct">({_pct(pct_o)})</span></span>
+        </div>""")
+
+    # Totals row
+    cls_tg = "pos" if grok_total_pnl >= 0 else "neg"
+    cls_to = "pos" if gpt_total_pnl >= 0 else "neg"
+    pct_tg = (grok_total_pnl / (INITIAL_CAPITAL_EUR * 3)) * 100
+    pct_to = (gpt_total_pnl  / (INITIAL_CAPITAL_EUR * 3)) * 100
+    if grok_total_pnl > gpt_total_pnl:
+        total_leader = '<span class="vs-winner grok-winner">GROK ↑</span>'
+    elif gpt_total_pnl > grok_total_pnl:
+        total_leader = '<span class="vs-winner gpt-winner">GPT ↑</span>'
+    else:
+        total_leader = '<span class="vs-tie">EMPATE</span>'
+
+    total_row = f"""<div class="sb-row sb-total">
+      <span class="sb-strategy">TOTAL</span>
+      <span class="sb-val {cls_tg}">{_eur(grok_total_pnl)} <span class="sb-pct">({_pct(pct_tg)})</span></span>
+      {total_leader}
+      <span class="sb-val {cls_to}">{_eur(gpt_total_pnl)} <span class="sb-pct">({_pct(pct_to)})</span></span>
+    </div>"""
+
+    return f"""<div class="scoreboard-section">
+  <div class="scoreboard-header">
+    <div class="sb-col-label provider-grok-label">🤖 Grok</div>
+    <div class="sb-col-center">vs</div>
+    <div class="sb-col-label provider-gpt-label">⚡ ChatGPT</div>
+  </div>
+  <div class="scoreboard-rows">
+    {"".join(rows)}
+    {total_row}
+  </div>
+</div>"""
 
 
 def _subscribe_section() -> str:
@@ -404,34 +507,53 @@ def _data_sources_panel() -> str:
 
 
 def _chart_script(histories: dict) -> str:
-    datasets = []
-    all_labels = set()
-    for key, hist in histories.items():
+    # Build unified sorted timeline with timestamps
+    all_points: dict = {}  # cycle -> ts
+    for hist in histories.values():
         for pt in hist:
-            all_labels.add(pt["cycle"])
+            c = pt["cycle"]
+            if c not in all_points:
+                all_points[c] = pt.get("ts", "")
 
-    labels = sorted(all_labels)
+    labels = sorted(all_points.keys())
+    timestamps = [all_points[c] for c in labels]
     labels_json = json.dumps(labels)
+    timestamps_json = json.dumps(timestamps)
 
-    colors = {"moderate": "#00d4ff", "aggressive": "#ffb800", "degen": "#ff3366"}
-    names  = {"moderate": "Moderate", "aggressive": "Aggressive", "degen": "Degen"}
+    colors = {
+        "moderate": "#00d4ff", "aggressive": "#ffb800", "degen": "#ff3366",
+        "moderate_openai": "#00d4ff", "aggressive_openai": "#ffb800", "degen_openai": "#ff3366",
+    }
+    names = {
+        "moderate": "Moderate (Grok)", "aggressive": "Aggressive (Grok)", "degen": "Degen (Grok)",
+        "moderate_openai": "Moderate (GPT)", "aggressive_openai": "Aggressive (GPT)", "degen_openai": "Degen (GPT)",
+    }
+    is_openai = {"moderate_openai", "aggressive_openai", "degen_openai"}
 
-    for key, hist in histories.items():
+    ordered_keys = ["moderate", "aggressive", "degen", "moderate_openai", "aggressive_openai", "degen_openai"]
+    datasets = []
+    for key in ordered_keys:
+        hist = histories.get(key, [])
         val_map = {pt["cycle"]: pt["value"] for pt in hist}
-        data    = [val_map.get(c) for c in labels]
-        c       = colors.get(key, "#888")
-        datasets.append({
+        data  = [val_map.get(c) for c in labels]
+        col   = colors.get(key, "#888")
+        dashed = key in is_openai
+        d = {
             "label": names.get(key, key),
             "data": data,
-            "borderColor": c,
-            "backgroundColor": c + "18",
-            "borderWidth": 2,
+            "borderColor": col,
+            "backgroundColor": col + "12",
+            "borderWidth": 2 if not dashed else 1.5,
             "pointRadius": 3,
             "pointHoverRadius": 5,
             "tension": 0.3,
             "fill": False,
             "spanGaps": True,
-        })
+        }
+        if dashed:
+            d["borderDash"] = [5, 4]
+            d["pointStyle"] = "triangle"
+        datasets.append(d)
 
     datasets_json = json.dumps(datasets)
 
@@ -440,13 +562,56 @@ def _chart_script(histories: dict) -> str:
 <script>
 (function() {{
   const isDark = () => !document.body.classList.contains('light');
-  const gridColor = () => isDark() ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.07)';
-  const tickColor = () => isDark() ? '#4a4a6a' : '#8888a0';
-  const tooltipBg = () => isDark() ? '#0f0f1c' : '#ffffff';
+  const gridColor  = () => isDark() ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.07)';
+  const tickColor  = () => isDark() ? '#7070a0' : '#4a4a72';
+  const tooltipBg  = () => isDark() ? '#0f0f1c' : '#ffffff';
   const tooltipTxt = () => isDark() ? '#e8e8f0' : '#111128';
 
-  const labels = {labels_json};
-  const datasets = {datasets_json};
+  const allCycles     = {labels_json};
+  const allTimestamps = {timestamps_json};
+  const allDatasets   = {datasets_json};
+
+  let currentWindow = 168; // default 1W
+
+  // Aggregate raw hourly data to one point per day (last value of day)
+  function aggregateDaily(cycles, timestamps, rawDatasets, sliceN) {{
+    const n     = sliceN == null ? cycles.length : sliceN;
+    const cyc   = cycles.slice(-n);
+    const tss   = timestamps.slice(-n);
+    const raws  = rawDatasets.map(ds => ds.data.slice(-n));
+
+    // dateMap: date string -> last index in sliced array
+    const dateMap = {{}};
+    tss.forEach((ts, i) => {{
+      const day = ts ? ts.slice(0, 10) : String(cyc[i]);
+      dateMap[day] = i;
+    }});
+
+    const indices     = Object.values(dateMap).sort((a, b) => a - b);
+    const dailyLabels = indices.map(i => {{
+      const ts = tss[i];
+      if (!ts) return String(cyc[i]);
+      const [, mm, dd] = ts.slice(0, 10).split('-');
+      return dd + '/' + mm;
+    }});
+    const dailyDatasets = rawDatasets.map((ds, di) => ({{
+      ...ds, data: indices.map(i => raws[di][i]),
+    }}));
+    return {{ lbs: dailyLabels, dss: dailyDatasets }};
+  }}
+
+  function buildData(n) {{
+    if (n === 24) {{
+      // Hourly — last 24 cycles, label as HH:mm
+      const cyc  = allCycles.slice(-24);
+      const tss  = allTimestamps.slice(-24);
+      const lbs  = tss.map((ts, i) => ts ? ts.slice(11, 16) : String(cyc[i]));
+      const dss  = allDatasets.map(ds => ({{ ...ds, data: ds.data.slice(-24) }}));
+      return {{ lbs, dss, xTitle: 'Hora' }};
+    }}
+    const {{ lbs, dss }} = aggregateDaily(allCycles, allTimestamps, allDatasets, n);
+    return {{ lbs, dss, xTitle: 'Día' }};
+  }}
 
   const baselinePlugin = {{
     id: 'baseline',
@@ -466,9 +631,10 @@ def _chart_script(histories: dict) -> str:
     }}
   }};
 
+  const initData = buildData(currentWindow);
   const cfg = {{
     type: 'line',
-    data: {{ labels, datasets }},
+    data: {{ labels: initData.lbs, datasets: initData.dss }},
     options: {{
       responsive: true,
       maintainAspectRatio: false,
@@ -491,16 +657,20 @@ def _chart_script(histories: dict) -> str:
           titleFont: {{ family: "'Syne', sans-serif", size: 12, weight: '700' }},
           bodyFont: {{ family: "'JetBrains Mono', monospace", size: 11 }},
           callbacks: {{
-            title: ctx => 'Cycle #' + ctx[0].label,
             label: ctx => ' ' + ctx.dataset.label + ': €' + (ctx.raw ?? '—'),
           }}
         }}
       }},
       scales: {{
         x: {{
-          title: {{ display: true, text: 'Ciclo', color: tickColor(), font: {{ size: 10 }} }},
+          title: {{ display: false }},
           grid: {{ color: gridColor() }},
-          ticks: {{ color: tickColor(), font: {{ family: "'JetBrains Mono', monospace", size: 10 }} }}
+          ticks: {{
+            color: tickColor(),
+            font: {{ family: "'JetBrains Mono', monospace", size: 10 }},
+            maxTicksLimit: 8,
+            maxRotation: 0,
+          }}
         }},
         y: {{
           title: {{ display: true, text: 'Valor (€)', color: tickColor(), font: {{ size: 10 }} }},
@@ -518,19 +688,38 @@ def _chart_script(histories: dict) -> str:
 
   let chart = new Chart(document.getElementById('portfolioChart'), cfg);
 
-  // Rebuild chart on theme toggle so colors update
+  function _applyColors() {{
+    cfg.options.plugins.legend.labels.color       = tickColor();
+    cfg.options.plugins.tooltip.backgroundColor   = tooltipBg();
+    cfg.options.plugins.tooltip.titleColor        = tooltipTxt();
+    cfg.options.plugins.tooltip.bodyColor         = tickColor();
+    cfg.options.plugins.tooltip.borderColor       = isDark() ? '#1a1a2e' : '#d0d4e8';
+    cfg.options.scales.x.grid.color               = gridColor();
+    cfg.options.scales.x.ticks.color              = tickColor();
+    cfg.options.scales.y.grid.color               = gridColor();
+    cfg.options.scales.y.ticks.color              = tickColor();
+    cfg.options.scales.y.title.color              = tickColor();
+  }}
+
   window._rebuildChart = function() {{
+    const d = buildData(currentWindow);
     chart.destroy();
-    cfg.options.plugins.legend.labels.color = tickColor();
-    cfg.options.plugins.tooltip.backgroundColor = tooltipBg();
-    cfg.options.plugins.tooltip.titleColor = tooltipTxt();
-    cfg.options.plugins.tooltip.bodyColor = tickColor();
-    cfg.options.plugins.tooltip.borderColor = isDark() ? '#1a1a2e' : '#d0d4e8';
-    cfg.options.scales.x.grid.color = gridColor();
-    cfg.options.scales.x.ticks.color = tickColor();
-    cfg.options.scales.y.grid.color = gridColor();
-    cfg.options.scales.y.ticks.color = tickColor();
+    cfg.data.labels   = d.lbs;
+    cfg.data.datasets = d.dss;
+    _applyColors();
     chart = new Chart(document.getElementById('portfolioChart'), cfg);
+  }};
+
+  window.filterChart = function(n) {{
+    currentWindow = n;
+    document.querySelectorAll('.time-btn').forEach(btn => {{
+      const map = {{ 24: '1D', 168: '1W', 720: '1M', null: 'ALL' }};
+      btn.classList.toggle('active', btn.textContent === (map[n] ?? 'ALL'));
+    }});
+    const d = buildData(n);
+    chart.data.labels   = d.lbs;
+    chart.data.datasets = d.dss;
+    chart.update('none');
   }};
 }})();
 
@@ -559,8 +748,8 @@ CSS = """
   --card: #0f0f1c;
   --border: #1e1e32;
   --text: #e8e8f0;
-  --muted: #9090b8;
-  --dim: #5a5a7e;
+  --muted: #a0a0c8;
+  --dim: #7070a0;
   --green: #00ff87;
   --red: #ff4466;
   --mono: 'JetBrains Mono', 'Fira Code', monospace;
@@ -573,8 +762,8 @@ body.light {
   --card: #ffffff;
   --border: #d0d4e8;
   --text: #111128;
-  --muted: #5a5a80;
-  --dim: #9898b8;
+  --muted: #4a4a72;
+  --dim: #6868a0;
   --green: #00a858;
   --red: #e0284a;
 }
@@ -768,6 +957,15 @@ header {
   line-height: 1;
 }
 .theme-btn:hover { background: var(--dim); }
+
+#infoBtn {
+  font-family: var(--display);
+  font-weight: 800;
+  font-size: 14px;
+  color: var(--muted);
+  min-width: 32px;
+}
+#infoBtn:hover { color: var(--text); }
 
 /* ── Chart section ── */
 .chart-section {
@@ -1137,9 +1335,43 @@ header {
   body { padding: 12px 14px; }
   .grid { grid-template-columns: 1fr; }
   .chart-wrap { height: 180px; }
+
+  /* ── Header: clean vertical stack ── */
+  header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
   .header-title { font-size: 18px; }
   .header-meta { font-size: 10px; }
+  .header-center {
+    align-items: stretch;
+    width: 100%;
+  }
+  .header-subscribe {
+    width: 100%;
+  }
+  .header-right {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .header-ts { text-align: left; }
   .header-ts .ts { font-size: 11px; }
+
+  /* ── Scoreboard: no pct on narrow screens ── */
+  .scoreboard-section { padding: 12px 14px; }
+  .sb-row {
+    grid-template-columns: 62px 1fr auto 1fr;
+    font-size: 11px;
+    padding: 6px 8px;
+    gap: 6px;
+  }
+  .sb-pct { display: none; }
+  .sb-val { font-size: 11px; }
+  .sb-strategy { font-size: 9px; }
+  .vs-winner, .vs-tie, .vs-pending { font-size: 8px; padding: 2px 6px; }
+
   .stat-value { font-size: 13px; }
   .trade-price { display: none; }
   .entry-list { max-height: 240px; }
@@ -1404,9 +1636,7 @@ header {
 .subscribe-btn:hover { background: #00d4ff30; }
 
 .subscribe-msg {
-  font-size: 11px;
-  margin-top: 8px;
-  min-height: 16px;
+  font-size: 10px;
 }
 .subscribe-msg.ok  { color: var(--green); }
 .subscribe-msg.err { color: var(--red); }
@@ -1457,6 +1687,453 @@ header {
   color: var(--dim);
   letter-spacing: 0.3px;
 }
+
+/* ── Provider badge (inside card name) ── */
+.provider-badge {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 2px;
+  border: 1px solid;
+  vertical-align: middle;
+  margin-left: 6px;
+  font-family: var(--mono);
+}
+
+/* ── OpenAI card top borders (same strategy color) ── */
+.card-moderate_openai::before  { background: linear-gradient(90deg, transparent 5%, #00d4ff 50%, transparent 95%); opacity: 0.55; }
+.card-aggressive_openai::before { background: linear-gradient(90deg, transparent 5%, #ffb800 50%, transparent 95%); opacity: 0.55; }
+.card-degen_openai::before      { background: linear-gradient(90deg, transparent 5%, #ff3366 50%, transparent 95%); opacity: 0.55; }
+
+/* ── Battle grid (2-col, 3 strategy rows) ── */
+.battle-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 0;
+}
+
+/* ── Provider column headers ── */
+.provider-columns-header {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 8px;
+  margin-top: 20px;
+}
+
+.provider-col-label {
+  font-family: var(--display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  padding: 7px 14px;
+  border-radius: 3px;
+  text-align: center;
+}
+
+.grok-col {
+  background: rgba(0,212,255,0.06);
+  border: 1px solid rgba(0,212,255,0.2);
+  color: #00d4ff;
+}
+
+.gpt-col {
+  background: rgba(16,185,129,0.06);
+  border: 1px solid rgba(16,185,129,0.2);
+  color: #10b981;
+}
+
+/* ── Scoreboard section ── */
+.scoreboard-section {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 16px 20px;
+  margin-bottom: 20px;
+  overflow: hidden;
+}
+
+.scoreboard-header {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+  gap: 8px;
+}
+
+.sb-col-label {
+  font-family: var(--display);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.provider-grok-label { color: #00d4ff; }
+.provider-gpt-label  { color: #10b981; text-align: right; }
+
+.sb-col-center {
+  font-family: var(--display);
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--muted);
+  letter-spacing: 3px;
+  text-align: center;
+}
+
+.scoreboard-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sb-row {
+  display: grid;
+  grid-template-columns: 80px 1fr auto 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  background: var(--surface);
+  border-radius: 2px;
+  font-size: 12px;
+  font-family: var(--mono);
+}
+
+.sb-total {
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+  background: transparent;
+  font-weight: 700;
+}
+
+.sb-strategy {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sb-total .sb-strategy { color: var(--text); }
+
+.sb-val { font-size: 12px; }
+.sb-val.pos { color: var(--green); }
+.sb-val.neg { color: var(--red); }
+.sb-val:last-child { text-align: right; }
+
+.sb-pct {
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.vs-winner {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  padding: 2px 8px;
+  border-radius: 2px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.grok-winner {
+  background: rgba(0,212,255,0.12);
+  color: #00d4ff;
+  border: 1px solid rgba(0,212,255,0.3);
+}
+
+.gpt-winner {
+  background: rgba(16,185,129,0.12);
+  color: #10b981;
+  border: 1px solid rgba(16,185,129,0.3);
+}
+
+.vs-tie {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.vs-pending {
+  font-size: 9px;
+  color: var(--dim);
+  text-align: center;
+}
+
+/* ── Chart header with legend hint ── */
+.chart-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chart-legend-hint {
+  font-size: 10px;
+  color: var(--muted);
+  font-family: var(--mono);
+  letter-spacing: 0.5px;
+}
+
+/* ── Chart time-range filter ── */
+.chart-time-filters {
+  display: flex;
+  gap: 4px;
+}
+
+.time-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all 0.15s;
+  letter-spacing: 0.3px;
+}
+
+.time-btn:hover { color: var(--text); border-color: var(--text); }
+
+.time-btn.active {
+  background: #00d4ff;
+  border-color: #00d4ff;
+  color: #06060d;
+}
+
+/* ── Responsive battle grid ── */
+@media (max-width: 900px) {
+  .battle-grid { grid-template-columns: 1fr; }
+  .provider-columns-header { display: none; }
+  .scoreboard-header { grid-template-columns: 1fr auto 1fr; }
+}
+
+/* ── Welcome modal ── */
+.modal-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(6,6,13,0.85);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  z-index: 10000;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  overflow-y: auto;
+  animation: fadeIn 0.3s ease;
+}
+
+.modal-overlay.visible { display: flex; }
+
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+.modal-box {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  max-width: 560px;
+  max-height: calc(100svh - 40px);
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  box-shadow: 0 24px 80px rgba(0,0,0,0.7);
+  animation: slideUp 0.3s cubic-bezier(0.16,1,0.3,1);
+}
+
+@keyframes slideUp {
+  from { transform: translateY(24px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+
+.modal-top-bar {
+  height: 2px;
+  background: linear-gradient(90deg, #00d4ff, #ffb800, #ff3366);
+}
+
+.modal-body {
+  padding: 28px 32px 24px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.modal-title {
+  font-family: var(--display);
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--text);
+  margin-bottom: 6px;
+  letter-spacing: -0.3px;
+}
+
+.modal-title .ai { color: #00d4ff; }
+
+.modal-subtitle {
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.5px;
+  margin-bottom: 22px;
+  text-transform: uppercase;
+}
+
+.modal-section {
+  margin-bottom: 18px;
+}
+
+.modal-section-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.8px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.modal-section-title::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.modal-agents {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.modal-agent {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 10px 12px;
+}
+
+.modal-agent-name {
+  font-size: 11px;
+  font-weight: 700;
+  margin-bottom: 3px;
+}
+
+.modal-agent-desc {
+  font-size: 10px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.modal-providers {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.modal-provider {
+  flex: 1;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.modal-provider-icon { font-size: 18px; }
+
+.modal-provider-info { min-width: 0; }
+
+.modal-provider-name {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+
+.modal-provider-desc {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.modal-disclaimer {
+  background: rgba(255,180,0,0.08);
+  border: 1px solid rgba(255,180,0,0.25);
+  border-radius: 3px;
+  padding: 10px 14px;
+  font-size: 11px;
+  color: #d4a030;
+  line-height: 1.5;
+}
+
+body.light .modal-disclaimer {
+  background: rgba(180,120,0,0.07);
+  border-color: rgba(180,120,0,0.25);
+  color: #8a5c00;
+}
+
+.modal-footer {
+  padding: 16px 32px 20px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.modal-url {
+  font-size: 10px;
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+.modal-close-btn {
+  background: #00d4ff18;
+  border: 1px solid #00d4ff40;
+  border-radius: 3px;
+  color: #00d4ff;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  padding: 9px 20px;
+  cursor: pointer;
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+
+.modal-close-btn:hover { background: #00d4ff30; }
+
+@media (max-width: 520px) {
+  .modal-overlay { padding: 12px; }
+  .modal-box { max-height: calc(100svh - 24px); }
+  .modal-body { padding: 18px 16px 14px; }
+  .modal-footer { padding: 12px 16px 14px; }
+  .modal-agents { grid-template-columns: 1fr; }
+  .modal-providers { flex-direction: column; }
+  .modal-title { font-size: 17px; }
+}
 """
 
 
@@ -1478,13 +2155,25 @@ def generate(prices: dict = None):
             prices = {**prices, **extra}
         print(f"[report] Using {len(prices)} cached prices, fetched {len(missing)} extra")
 
-    histories = {key: _load_history(key) for key in PROFILES}
-    has_history = any(len(h) > 0 for h in histories.values())
+    histories    = {key: _load_history(key) for key in PROFILES}
+    has_history  = any(len(h) > 0 for h in histories.values())
+    scoreboard   = _comparison_scoreboard(prices)
 
     if has_history:
         chart_section = f"""
 <div class="chart-section">
-  <div class="section-label">Evolución del portfolio (€ por ciclo)</div>
+  <div class="chart-section-header">
+    <div class="section-label" style="margin-bottom:0">Evolución del portfolio (€ por ciclo)</div>
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <div class="chart-time-filters">
+        <button class="time-btn" onclick="filterChart(24)">1D</button>
+        <button class="time-btn active" onclick="filterChart(168)">1W</button>
+        <button class="time-btn" onclick="filterChart(720)">1M</button>
+        <button class="time-btn" onclick="filterChart(null)">ALL</button>
+      </div>
+      <div class="chart-legend-hint">— Grok &nbsp;&nbsp; ╌ GPT-4o mini</div>
+    </div>
+  </div>
   <div class="chart-wrap"><canvas id="portfolioChart"></canvas></div>
 </div>"""
     else:
@@ -1494,10 +2183,18 @@ def generate(prices: dict = None):
   <div class="chart-empty">Sin datos históricos aún — el gráfico aparecerá tras el primer ciclo.</div>
 </div>"""
 
-    now          = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
-    cards        = "\n".join(_profile_card(k, p, prices) for k, p in PROFILES.items())
-    sources_html  = _data_sources_panel()
-    subscribe_html = ""
+    # Build battle grid — 2 cols: Grok | GPT, paired by strategy
+    battle_cards = []
+    for grok_key, openai_key in STRATEGY_PAIRS:
+        grok_profile  = PROFILES[grok_key]
+        openai_profile = PROFILES[openai_key]
+        battle_cards.append(_profile_card(grok_key,  grok_profile,  prices))
+        battle_cards.append(_profile_card(openai_key, openai_profile, prices))
+
+    battle_grid = "\n".join(battle_cards)
+
+    now = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
+    sources_html = _data_sources_panel()
 
     html = f"""<!DOCTYPE html>
 <html lang="es">
@@ -1513,13 +2210,80 @@ def generate(prices: dict = None):
 </head>
 <body>
 
+<!-- Welcome modal — shown once via localStorage -->
+<div class="modal-overlay" id="welcomeModal">
+  <div class="modal-box">
+    <div class="modal-top-bar"></div>
+    <div class="modal-body">
+      <div class="modal-title">Crypto<span class="ai">Ai</span>Arena</div>
+      <div class="modal-subtitle">Paper trading · batalla de inteligencias artificiales</div>
+
+      <div class="modal-section">
+        <div class="modal-section-title">Qué es esto</div>
+        <p style="font-size:12.5px;color:var(--text);line-height:1.65;opacity:0.85">
+          6 agentes de IA compiten en trading de criptomonedas con <strong>€1.000 virtuales</strong> cada uno.
+          Cada hora analizan el mercado en tiempo real y deciden qué comprar o vender.
+          Dos modelos de IA enfrentados: Grok 4.1 fast reasoning (xAI) vs GPT-4o mini (OpenAI).
+        </p>
+      </div>
+
+      <div class="modal-section">
+        <div class="modal-section-title">3 estrategias por modelo</div>
+        <div class="modal-agents">
+          <div class="modal-agent">
+            <div class="modal-agent-name" style="color:#00d4ff">Moderate</div>
+            <div class="modal-agent-desc">Top 10 coins · Max 25% por posición · Conservador</div>
+          </div>
+          <div class="modal-agent">
+            <div class="modal-agent-name" style="color:#ffb800">Aggressive</div>
+            <div class="modal-agent-desc">Top 50 coins · Momentum · Alta rotación</div>
+          </div>
+          <div class="modal-agent">
+            <div class="modal-agent-name" style="color:#ff3366">Degen</div>
+            <div class="modal-agent-desc">Todo en alts · FOMO válido · 10x o nada</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-section">
+        <div class="modal-section-title">Los dos equipos</div>
+        <div class="modal-providers">
+          <div class="modal-provider">
+            <div class="modal-provider-icon">🤖</div>
+            <div class="modal-provider-info">
+              <div class="modal-provider-name" style="color:#00d4ff">Grok (xAI)</div>
+              <div class="modal-provider-desc">grok-4-1-fast-reasoning · ciclos 0/5/10 min</div>
+            </div>
+          </div>
+          <div class="modal-provider">
+            <div class="modal-provider-icon">⚡</div>
+            <div class="modal-provider-info">
+              <div class="modal-provider-name" style="color:#10b981">GPT-4o mini (OpenAI)</div>
+              <div class="modal-provider-desc">Modelo gpt-4o-mini · ciclos 15/20/25 min</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-disclaimer">
+        ⚠ <strong>Paper trading</strong> — dinero ficticio. No hay dinero real invertido.
+        Esto es un experimento, no asesoramiento financiero.
+      </div>
+    </div>
+    <div class="modal-footer">
+      <span class="modal-url">cryptoaiarena.com</span>
+      <button class="modal-close-btn" onclick="closeWelcome()">Entendido, ver arena →</button>
+    </div>
+  </div>
+</div>
+
 <header>
   <div class="header-left">
     <div class="header-title">
       <span class="live-dot"></span>
       Crypto<span class="ai">Ai</span>Arena
     </div>
-    <div class="header-meta">Paper trading · 3 agentes</div>
+    <div class="header-meta">Paper trading · 6 agentes · Grok vs GPT-4o mini</div>
   </div>
 
   <div class="header-center">
@@ -1537,8 +2301,8 @@ def generate(prices: dict = None):
         </div>
       </div>
       <button class="subscribe-btn" onclick="subscribe()">Recibir alertas</button>
+      <div class="subscribe-msg" id="sub-msg"></div>
     </div>
-    <div class="subscribe-msg" id="sub-msg"></div>
   </div>
 
   <div class="header-right">
@@ -1546,23 +2310,53 @@ def generate(prices: dict = None):
       <span class="ts" id="localTime">{now}</span>
       <span id="tzLabel">UTC</span> · precios live · CoinGecko
     </div>
+    <button class="theme-btn" id="infoBtn" onclick="openWelcome()" title="¿Qué es esto?">?</button>
     <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="Cambiar tema">☀️</button>
   </div>
 </header>
 
+{scoreboard}
+
 {chart_section}
 
-<div class="grid">
-{cards}
+<div class="provider-columns-header">
+  <div class="provider-col-label grok-col">🤖 Grok</div>
+  <div class="provider-col-label gpt-col">⚡ GPT-4o mini</div>
 </div>
-
-{subscribe_html}
+<div class="battle-grid">
+{battle_grid}
+</div>
 
 {sources_html}
 
 {_chart_script(histories) if has_history else ''}
 
 <script>
+(function() {{
+  // Welcome modal — show once
+  if (!localStorage.getItem('caa_welcomed')) {{
+    document.getElementById('welcomeModal').classList.add('visible');
+  }}
+}})();
+
+function closeWelcome() {{
+  localStorage.setItem('caa_welcomed', '1');
+  const modal = document.getElementById('welcomeModal');
+  modal.style.animation = 'fadeIn 0.2s ease reverse forwards';
+  setTimeout(() => modal.classList.remove('visible'), 180);
+}}
+
+function openWelcome() {{
+  const modal = document.getElementById('welcomeModal');
+  modal.style.animation = '';
+  modal.classList.add('visible');
+}}
+
+// Close on backdrop click
+document.getElementById('welcomeModal').addEventListener('click', function(e) {{
+  if (e.target === this) closeWelcome();
+}});
+
 (function() {{
   // Theme init — apply before first paint, then fix chart colors
   if (localStorage.getItem('theme') === 'light') {{

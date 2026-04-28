@@ -282,7 +282,7 @@ def notify_welcome(email: str) -> None:
         Esto es lo que recibirás:
       </p>
       <ul style="color:#9090b8;font-size:13px;line-height:1.9;padding-left:18px">
-        <li>📊 Resumen diario a las 18:00 UTC con el estado de los 3 portfolios</li>
+        <li>📊 Resumen diario a las 18:00 UTC con el estado de los 6 portfolios (Grok vs GPT-4o mini)</li>
         <li>⚡ Alertas puntuales cuando haya movimientos relevantes en el mercado</li>
       </ul>
     </div>

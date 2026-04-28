@@ -5,6 +5,7 @@ import json
 import os
 from datetime import datetime, timezone, timedelta
 
+from openai import OpenAI
 import data as market_data
 import portfolio as pf
 import agent
@@ -12,8 +13,14 @@ import memory as mem
 import notifier
 import generate_report
 import subscribers
-from config import INITIAL_CAPITAL_EUR
+from config import INITIAL_CAPITAL_EUR, XAI_API_KEY, XAI_BASE_URL, MODEL, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL
 from profiles import PROFILES
+
+
+def _make_client(provider: str):
+    if provider == "openai":
+        return OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL), OPENAI_MODEL
+    return OpenAI(api_key=XAI_API_KEY, base_url=XAI_BASE_URL), MODEL
 
 PYTHON = r"C:\Users\edgar\AppData\Local\Programs\Python\Python310\python.exe"
 
@@ -108,6 +115,8 @@ def main(profile_key: str = "moderate"):
         print(f"Unknown profile '{profile_key}'. Available: {list(PROFILES.keys())}")
         sys.exit(1)
 
+    llm_client, llm_model = _make_client(profile.get("provider", "xai"))
+
     print(f"[{datetime.now(timezone.utc).isoformat()}] [{profile['name']}] Cycle start")
 
     try:
@@ -161,7 +170,8 @@ def main(profile_key: str = "moderate"):
     print(f"Running agent (cycle #{cycle}, regime={current_regime_label})...")
     try:
         portfolio, trade_log, summary, activity_log, in_cycle_memories = agent.run_cycle(
-            portfolio, market_text, prices, system_prompt=full_system_prompt, mem=profile_memory
+            portfolio, market_text, prices, system_prompt=full_system_prompt, mem=profile_memory,
+            llm_client=llm_client, llm_model=llm_model,
         )
     except Exception as e:
         traceback.print_exc()
@@ -209,6 +219,8 @@ def main(profile_key: str = "moderate"):
             value_before=value_before,
             value_after=value_after,
             memory_prompt=memory_prompt,
+            llm_client=llm_client,
+            llm_model=llm_model,
         )
         delta_pct = ((value_after - value_before) / value_before * 100) if value_before else 0
         for m in reflection_memories:
@@ -233,6 +245,8 @@ def main(profile_key: str = "moderate"):
                 profile_name=profile["name"],
                 system_prompt=profile["system_prompt"],
                 raw_entries_text=raw_text,
+                llm_client=llm_client,
+                llm_model=llm_model,
             )
             mem.prune_after_summarization(profile_memory)
             for s in summaries:

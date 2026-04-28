@@ -235,8 +235,13 @@ def run_cycle(
     prices: dict[str, float],
     system_prompt: str = None,
     mem: dict = None,
+    llm_client=None,
+    llm_model: str = None,
 ) -> tuple[dict, list[str], str, list[dict], list[dict]]:
     """Run one trading cycle. Returns updated portfolio, trade log, agent summary, activity log, in-cycle memories."""
+    _client = llm_client or client
+    _model = llm_model or MODEL
+
     portfolio_text = pf.format_portfolio_for_llm(portfolio, prices)
     user_msg = f"{portfolio_text}\n\n{market_text}\n\nAnalyze the market and execute trades. Call done() when finished."
 
@@ -253,8 +258,8 @@ def run_cycle(
     max_iterations = 20
 
     for _ in range(max_iterations):
-        response = client.chat.completions.create(
-            model=MODEL,
+        response = _client.chat.completions.create(
+            model=_model,
             messages=messages,
             tools=TOOLS,
             tool_choice="auto",
@@ -417,8 +422,13 @@ def run_reflection(
     value_before: float,
     value_after: float,
     memory_prompt: str,
+    llm_client=None,
+    llm_model: str = None,
 ) -> list[dict]:
     """Post-cycle reflection. LLM sees results and writes memories. Returns new memory entries."""
+    _client = llm_client or client
+    _model = llm_model or MODEL
+
     delta = value_after - value_before
     delta_pct = (delta / value_before * 100) if value_before else 0
     trades_str = "\n".join(trade_log) if trade_log else "No trades this cycle."
@@ -453,8 +463,8 @@ Call done_reflecting() when finished."""
     max_iterations = 10
 
     for _ in range(max_iterations):
-        response = client.chat.completions.create(
-            model=MODEL,
+        response = _client.chat.completions.create(
+            model=_model,
             messages=messages,
             tools=REFLECTION_TOOLS,
             tool_choice="auto",
@@ -502,8 +512,11 @@ Call done_reflecting() when finished."""
     return new_memories
 
 
-def run_summarization(profile_name: str, system_prompt: str, raw_entries_text: str) -> list[dict]:
+def run_summarization(profile_name: str, system_prompt: str, raw_entries_text: str, llm_client=None, llm_model: str = None) -> list[dict]:
     """Distill many raw memories into summary entries. Returns new summary memory entries."""
+    _client = llm_client or client
+    _model = llm_model or MODEL
+
     user_msg = f"""You are the {profile_name} agent. Your memory log has grown large and needs compressing.
 
 Below are your raw trading memories. Distill the most important patterns, lessons, and errors into 5-8 high-value summaries.
@@ -524,8 +537,8 @@ Call done_reflecting() when done writing summaries."""
     max_iterations = 15
 
     for _ in range(max_iterations):
-        response = client.chat.completions.create(
-            model=MODEL,
+        response = _client.chat.completions.create(
+            model=_model,
             messages=messages,
             tools=REFLECTION_TOOLS,
             tool_choice="auto",
