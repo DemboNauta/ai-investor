@@ -198,13 +198,14 @@ def _memory_coin_stats(coin_stats: dict) -> str:
     if not rows:
         return ""
     return f"""<div class="section-label" style="margin-top:12px">Historial por coin</div>
-    <table class="holdings-table" style="margin-bottom:12px">
+    <div class="table-scroll" style="margin-bottom:12px">
+    <table class="holdings-table" style="margin-bottom:0">
       <thead><tr>
         <th style="text-align:left">Coin</th>
         <th>Trades</th><th>Aciertos</th><th>Media P&amp;L</th>
       </tr></thead>
       <tbody>{"".join(rows)}</tbody>
-    </table>"""
+    </table></div>"""
 
 
 def _memory_summaries(summaries: list) -> str:
@@ -337,13 +338,14 @@ def _profile_card(key: str, profile: dict, prices: dict) -> str:
           </div>
         </div>
         <div class="section-label">Holdings</div>
+        <div class="table-scroll">
         <table class="holdings-table">
           <thead><tr>
             <th style="text-align:left">Coin</th>
             <th>Cantidad</th><th>Precio</th><th>Valor</th><th>P&amp;L%</th>
           </tr></thead>
           <tbody>{_holdings_rows(holdings, prices)}</tbody>
-        </table>"""
+        </table></div>"""
 
     tab_trades = f"""
         <div class="trade-list" style="max-height:340px">{_trade_items(trades, last_run)}</div>"""
@@ -507,16 +509,16 @@ def _data_sources_panel() -> str:
 
 
 def _chart_script(histories: dict) -> str:
-    # Build unified sorted timeline with timestamps
-    all_points: dict = {}  # cycle -> ts
+    # Build unified timeline keyed by hour — all agents in same hour align on x-axis
+    hour_keys: set = set()
     for hist in histories.values():
         for pt in hist:
-            c = pt["cycle"]
-            if c not in all_points:
-                all_points[c] = pt.get("ts", "")
+            ts = pt.get("ts", "")
+            if ts:
+                hour_keys.add(ts[:13] + ":00")  # "YYYY-MM-DDTHH:00"
 
-    labels = sorted(all_points.keys())
-    timestamps = [all_points[c] for c in labels]
+    labels = sorted(hour_keys)          # sorted "YYYY-MM-DDTHH:00" strings
+    timestamps = labels                  # same — used by JS for display/aggregation
     labels_json = json.dumps(labels)
     timestamps_json = json.dumps(timestamps)
 
@@ -534,8 +536,8 @@ def _chart_script(histories: dict) -> str:
     datasets = []
     for key in ordered_keys:
         hist = histories.get(key, [])
-        val_map = {pt["cycle"]: pt["value"] for pt in hist}
-        data  = [val_map.get(c) for c in labels]
+        val_map = {pt["ts"][:13] + ":00": pt["value"] for pt in hist if pt.get("ts")}
+        data  = [val_map.get(ts) for ts in labels]
         col   = colors.get(key, "#888")
         dashed = key in is_openai
         d = {
@@ -1157,6 +1159,20 @@ header {
 .holdings-table td.pos { color: var(--green); }
 .holdings-table td.neg { color: var(--red); }
 .no-data-cell { text-align: center; color: var(--dim); padding: 12px; font-size: 11px; }
+
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin-bottom: 18px;
+}
+.table-scroll .holdings-table { margin-bottom: 0; }
+
+@media (max-width: 520px) {
+  .holdings-table { font-size: 10px; }
+  .holdings-table th, .holdings-table td { padding: 5px 4px; }
+  .holdings-table td:nth-child(3) { display: none; }
+  .holdings-table th:nth-child(3) { display: none; }
+}
 
 /* ── Trades ── */
 .trade-list {
@@ -2480,6 +2496,48 @@ function switchTab(btn, panelId) {{
   const panel = document.getElementById(panelId);
   if (panel) panel.classList.add('active');
 }}
+
+// Auto-reload when an agent finishes its cycle (cron fires + 60s grace)
+(function() {{
+  const CRON_MINUTES = [0, 5, 10, 15, 20, 25];
+  const GRACE_MS = 60000;
+
+  function secsUntil(targetMin) {{
+    const now = new Date();
+    const cur = now.getMinutes() * 60 + now.getSeconds();
+    const tgt = targetMin * 60;
+    return tgt > cur ? tgt - cur : 3600 - cur + tgt;
+  }}
+
+  function saveAndReload() {{
+    const tabs = [];
+    document.querySelectorAll('.tab-btn.active').forEach(btn => {{
+      const m = (btn.getAttribute('onclick') || '').match(/'([^']+)'/);
+      if (m) tabs.push(m[1]);
+    }});
+    sessionStorage.setItem('_tabState', JSON.stringify(tabs));
+    sessionStorage.setItem('_scrollY', window.scrollY);
+    location.reload();
+  }}
+
+  CRON_MINUTES.forEach(min => {{
+    const delay = secsUntil(min) * 1000 + GRACE_MS;
+    setTimeout(saveAndReload, delay);
+  }});
+
+  // Restore state after reload
+  try {{
+    const tabs = JSON.parse(sessionStorage.getItem('_tabState') || '[]');
+    const scrollY = parseInt(sessionStorage.getItem('_scrollY') || '0', 10);
+    sessionStorage.removeItem('_tabState');
+    sessionStorage.removeItem('_scrollY');
+    tabs.forEach(panelId => {{
+      const btn = document.querySelector(`.tab-btn[onclick*="'${{panelId}}'"]`);
+      if (btn) switchTab(btn, panelId);
+    }});
+    if (scrollY) window.scrollTo(0, scrollY);
+  }} catch(e) {{}}
+}})();
 
 function filterEntries(cat, listId) {{
   const list = document.getElementById(listId);

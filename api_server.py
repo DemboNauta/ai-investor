@@ -307,6 +307,14 @@ class ChatHandler(BaseHTTPRequestHandler):
             self.wfile.write(html)
             return
 
+        if path == "/api/last-update":
+            import glob as _glob
+            base = os.path.dirname(os.path.abspath(__file__))
+            files = _glob.glob(os.path.join(base, "portfolio_*.json"))
+            ts = max((os.path.getmtime(f) for f in files), default=0)
+            self._json(200, {"ts": ts})
+            return
+
         profile_key = self._profile_from_path(path)
         if not profile_key or profile_key not in PROFILES:
             self.send_response(404)
