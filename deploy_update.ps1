@@ -1,4 +1,4 @@
-# Sube .py modificados, reinicia chat server y regenera dashboard
+# Sube .py modificados, reinicia api_server y regenera dashboard
 $VPS_IP   = "178.104.140.243"
 $VPS_USER = "root"
 $SSH_KEY  = "$env:USERPROFILE\.ssh\id_ed25519"
@@ -18,7 +18,11 @@ $FILES = @(
     "run_once.py",
     "generate_report.py",
     "main.py",
-    "chat_server.py"
+    "api_server.py",
+    "notifier.py",
+    "subscribers.py",
+    "daily_digest.py",
+    "backup.sh"
 )
 
 # 1. Subir archivos
@@ -31,16 +35,11 @@ foreach ($file in $FILES) {
     scp @SSH_ARGS $local $remote
 }
 
-# Subir web/index.html por separado
-$localHtml  = Join-Path $LOCAL_DIR "web\index.html"
-$remoteHtml = "${SSH_TARGET}:${REMOTE_DIR}/web/index.html"
-Write-Host "    web/index.html" -ForegroundColor Gray
-scp @SSH_ARGS $localHtml $remoteHtml
 
 # 2. Verificar sintaxis
 Write-Host ""
 Write-Host "==> [2/4] Verificando imports..." -ForegroundColor Cyan
-$pyCheck = "cd $REMOTE_DIR && source venv/bin/activate && python3 -m py_compile agent.py data.py memory.py run_once.py generate_report.py main.py chat_server.py && echo OK"
+$pyCheck = "cd $REMOTE_DIR && source venv/bin/activate && python3 -m py_compile agent.py data.py memory.py run_once.py generate_report.py main.py api_server.py && echo OK"
 $result = ssh @SSH_ARGS $SSH_TARGET $pyCheck
 if ($result -match "OK") {
     Write-Host "  Imports OK" -ForegroundColor Green
@@ -57,11 +56,11 @@ Write-Host "==> [3/4] Reiniciando chat server..." -ForegroundColor Cyan
 $restartSh = @"
 #!/bin/bash
 mkdir -p /root/ai-investor/logs
-pkill -f chat_server.py 2>/dev/null
+pkill -f api_server.py 2>/dev/null
 sleep 1
 cd /root/ai-investor
 source venv/bin/activate
-nohup python3 chat_server.py >> /root/ai-investor/logs/chat.log 2>&1 &
+nohup python3 api_server.py >> /root/ai-investor/logs/chat.log 2>&1 &
 echo \$! > /tmp/chat_server.pid
 sleep 2
 ss -tlnp | grep 5001 && echo LISTENING || echo NOT_LISTENING

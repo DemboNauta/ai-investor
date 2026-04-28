@@ -1,7 +1,9 @@
 """Single-cycle runner — called by Windows Task Scheduler every hour."""
 import sys
 import traceback
-from datetime import datetime, timezone
+import json
+import os
+from datetime import datetime, timezone, timedelta
 
 import data as market_data
 import portfolio as pf
@@ -9,10 +11,95 @@ import agent
 import memory as mem
 import notifier
 import generate_report
+import subscribers
 from config import INITIAL_CAPITAL_EUR
 from profiles import PROFILES
 
 PYTHON = r"C:\Users\edgar\AppData\Local\Programs\Python\Python310\python.exe"
+
+_ALERT_STATE_FILE = os.path.join(os.path.dirname(__file__), "alert_state.json")
+_ALERT_COOLDOWN_H = 6   # horas mínimas entre alertas urgentes
+_BIG_TRADE_EUR    = 120  # trade >= €120 = alerta
+_BIG_MOVE_PCT     = 7    # cambio >= 7% en un ciclo = alerta
+_FG_EXTREME_LOW   = 20
+_FG_EXTREME_HIGH  = 80
+
+
+def _last_alert_ts() -> datetime | None:
+    if not os.path.exists(_ALERT_STATE_FILE):
+        return None
+    try:
+        with open(_ALERT_STATE_FILE) as f:
+            ts = json.load(f).get("last_alert_ts")
+        return datetime.fromisoformat(ts) if ts else None
+    except Exception:
+        return None
+
+
+def _save_alert_ts():
+    with open(_ALERT_STATE_FILE, "w") as f:
+        json.dump({"last_alert_ts": datetime.now(timezone.utc).isoformat()}, f)
+
+
+def _maybe_send_alert(
+    profile_key: str,
+    profile_name: str,
+    cycle: int,
+    fear_greed: dict | None,
+    value_before: float,
+    value_after: float,
+    trade_log: list,
+    activity_log: list,
+    pnl_pct: float,
+):
+    # Check cooldown
+    last = _last_alert_ts()
+    if last:
+        elapsed = datetime.now(timezone.utc) - last.replace(tzinfo=timezone.utc) if last.tzinfo is None else datetime.now(timezone.utc) - last
+        if elapsed < timedelta(hours=_ALERT_COOLDOWN_H):
+            return
+
+    # Check conditions
+    fg_val    = fear_greed.get("value") if fear_greed else None
+    fg_label  = fear_greed.get("value_classification", "") if fear_greed else ""
+    fg_extreme = fg_val is not None and (fg_val < _FG_EXTREME_LOW or fg_val > _FG_EXTREME_HIGH)
+    big_trade  = any(
+        a.get("amount_eur", 0) >= _BIG_TRADE_EUR
+        for a in activity_log if a.get("tool") in ("buy", "sell")
+    )
+    delta_pct  = abs((value_after - value_before) / value_before * 100) if value_before else 0
+    big_move   = delta_pct >= _BIG_MOVE_PCT
+
+    if not (fg_extreme or big_trade or big_move):
+        return
+
+    reasons = []
+    if fg_extreme:
+        direction = "Miedo extremo" if fg_val < _FG_EXTREME_LOW else "Codicia extrema"
+        reasons.append(f"{direction} (F&G: {fg_val} — {fg_label})")
+    if big_trade:
+        reasons.append(f"Trade significativo (≥€{_BIG_TRADE_EUR})")
+    if big_move:
+        reasons.append(f"Movimiento de ciclo: {delta_pct:.1f}%")
+
+    reason = " · ".join(reasons)
+    recipients = subscribers.get_all()
+    if not recipients:
+        return
+
+    sent = notifier.notify_alert(
+        profile_name=profile_name,
+        cycle=cycle,
+        reason=reason,
+        total_eur=value_after,
+        pnl_pct=pnl_pct,
+        trade_log=trade_log,
+        activity_log=activity_log,
+        fear_greed=fear_greed,
+    )
+    if sent > 0:
+        _save_alert_ts()
+        print(f"  [alert] Alerta enviada a {sent} suscriptores: {reason}")
 
 
 def main(profile_key: str = "moderate"):
@@ -156,21 +243,25 @@ def main(profile_key: str = "moderate"):
 
     mem.save(profile_key, profile_memory, profile_name=profile["name"])
 
-    notifier.notify_cycle(
-        cycle=cycle,
-        trade_log=trade_log,
-        agent_summary=summary,
-        activity_log=activity_log,
-        total_eur=value_after,
-        pnl_eur=pnl,
-        pnl_pct=pnl_pct,
-        cash_eur=portfolio["cash_eur"],
-        profile_name=profile["name"],
-    )
     try:
         generate_report.generate(prices=prices)
     except Exception as e:
         print(f"  [report] Error: {e}")
+
+    try:
+        _maybe_send_alert(
+            profile_key=profile_key,
+            profile_name=profile["name"],
+            cycle=cycle,
+            fear_greed=fear_greed,
+            value_before=value_before,
+            value_after=value_after,
+            trade_log=trade_log,
+            activity_log=activity_log,
+            pnl_pct=pnl_pct,
+        )
+    except Exception as e:
+        print(f"  [alert] Error: {e}")
 
     print("Done.")
 

@@ -3,3 +3,4 @@ requests>=2.31.0
 rich>=13.0.0
 schedule>=1.2.0
 python-dotenv>=1.0.0
+resend>=2.21.0

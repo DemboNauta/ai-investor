@@ -1,4 +1,4 @@
-"""Chat server — responde preguntas sobre cada agente. Puerto 5001."""
+"""API server — chat con agentes, suscripciones y alertas. Puerto 5001."""
 import os
 import json
 import time
@@ -256,6 +256,36 @@ class ChatHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path   = parsed.path
 
+        # Confirm subscription
+        if path == "/api/confirm":
+            params = parse_qs(parsed.query)
+            email  = params.get("email", [""])[0]
+            tok    = params.get("token", [""])[0]
+            ok = subscribers.confirm(email, tok)
+            if ok:
+                try:
+                    notifier.notify_welcome(email)
+                except Exception as e:
+                    print(f"[api] Welcome email error: {e}")
+            html = (
+                b"<html><body style='font-family:sans-serif;text-align:center;padding:60px;background:#06060d;color:#e8e8f0'>"
+                b"<h2 style='color:#00ff87'>\xe2\x9c\x85 \xc2\xa1Suscripci\xc3\xb3n confirmada!</h2>"
+                b"<p>Ya recibir\xc3\xa1s el resumen diario y alertas de CryptoAiArena.</p>"
+                b"<a href='https://cryptoaiarena.com' style='color:#00d4ff'>Ver dashboard</a>"
+                b"</body></html>"
+            ) if ok else (
+                b"<html><body style='font-family:sans-serif;text-align:center;padding:60px;background:#06060d;color:#e8e8f0'>"
+                b"<h2 style='color:#ff4466'>\xe2\x9d\x8c Enlace inv\xc3\xa1lido o expirado.</h2>"
+                b"<p>Vuelve a suscribirte en <a href='https://cryptoaiarena.com' style='color:#00d4ff'>cryptoaiarena.com</a></p>"
+                b"</body></html>"
+            )
+            self.send_response(200)
+            self._cors()
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(html)
+            return
+
         # Unsubscribe
         if path == "/api/unsubscribe":
             params = parse_qs(parsed.query)
@@ -265,7 +295,7 @@ class ChatHandler(BaseHTTPRequestHandler):
             html = (
                 b"<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
                 b"<h2>\xe2\x9c\x85 Suscripci\xc3\xb3n cancelada.</h2>"
-                b"<p>Ya no recibir\xc3\xa1s alertas de AI Investor.</p></body></html>"
+                b"<p>Ya no recibir\xc3\xa1s alertas de CryptoAiArena.</p></body></html>"
             ) if ok else (
                 b"<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
                 b"<h2>\xe2\x9d\x8c Enlace inv\xc3\xa1lido.</h2></body></html>"
@@ -288,9 +318,9 @@ class ChatHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = urlparse(self.path).path
 
-        # Subscribe endpoint
+        # Subscribe endpoint — doble opt-in
         if path == "/api/subscribe":
-            ip = self.client_address[0]
+            ip  = self.client_address[0]
             now = time.time()
             _sub_buckets[ip] = [t for t in _sub_buckets[ip] if now - t < RATE_WINDOW]
             if len(_sub_buckets[ip]) >= SUB_RATE_MAX:
@@ -305,12 +335,13 @@ class ChatHandler(BaseHTTPRequestHandler):
             except Exception:
                 email = ""
 
-            ok, msg = subscribers.add(email, ip)
+            ok, msg, tok = subscribers.add_pending(email, ip)
             if ok:
                 try:
-                    notifier.notify_welcome(email)
+                    url = subscribers.confirm_url(email, tok)
+                    notifier.notify_confirmation(email, url)
                 except Exception as e:
-                    print(f"[chat] Welcome email error: {e}")
+                    print(f"[api] Confirmation email error: {e}")
             self._json(200 if ok else 400, {"ok": ok, "message": msg})
             return
 

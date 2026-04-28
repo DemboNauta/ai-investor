@@ -334,6 +334,9 @@ def _profile_card(key: str, profile: dict, prices: dict) -> str:
 
     tab_chat = f"""
         <div class="chat-box" id="chat-{key}" style="border:none;background:transparent">
+          <div style="display:flex;justify-content:flex-end;margin-bottom:4px">
+            <button class="chat-new" onclick="clearChat('{key}')" title="Nuevo chat">&#10005; Nuevo chat</button>
+          </div>
           <div class="chat-messages" id="chat-msgs-{key}" style="min-height:80px;max-height:280px"></div>
           <div class="chat-input-row" style="border:1px solid var(--border);border-radius:3px;margin-top:8px">
             <input class="chat-input" id="chat-in-{key}" type="text"
@@ -366,6 +369,21 @@ def _profile_card(key: str, profile: dict, prices: dict) -> str:
         <div class="tab-panel" id="tc-{key}">{tab_chat}</div>
       </div>
     </div>"""
+
+
+def _subscribe_section() -> str:
+    return """<div class="subscribe-section">
+  <div class="section-label">Alertas por email</div>
+  <div class="subscribe-box">
+    <p class="subscribe-desc">Resumen diario + alertas de mercado importantes.</p>
+    <div class="subscribe-row">
+      <input class="subscribe-input" id="sub-email" type="email" placeholder="tu@email.com"
+        onkeydown="if(event.key==='Enter')subscribe()">
+      <button class="subscribe-btn" onclick="subscribe()">Suscribirse</button>
+    </div>
+    <div class="subscribe-msg" id="sub-msg"></div>
+  </div>
+</div>"""
 
 
 def _data_sources_panel() -> str:
@@ -638,6 +656,90 @@ header {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.header-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.header-sub-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.header-subscribe {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  position: relative;
+}
+
+.sub-tooltip-wrap {
+  position: relative;
+}
+
+.sub-tooltip {
+  display: none;
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 14px;
+  width: 240px;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.6;
+  z-index: 100;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+}
+
+.sub-tooltip::before {
+  content: '';
+  position: absolute;
+  top: -5px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 8px; height: 8px;
+  background: var(--card);
+  border-left: 1px solid var(--border);
+  border-top: 1px solid var(--border);
+  rotate: 45deg;
+}
+
+.sub-tooltip strong { color: var(--text); display: block; margin-bottom: 4px; }
+.sub-tooltip ul { margin: 4px 0 0; padding-left: 16px; }
+.sub-tooltip li { margin-bottom: 2px; }
+
+.sub-tooltip-wrap:hover .sub-tooltip,
+.sub-tooltip-wrap:focus-within .sub-tooltip {
+  display: block;
+}
+
+.header-sub-input {
+  width: 180px;
+  padding: 5px 8px;
+  font-size: 11px;
+}
+
+.header-subscribe .subscribe-msg {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  white-space: nowrap;
+  font-size: 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 3px 8px;
+  z-index: 10;
 }
 
 .header-ts {
@@ -1119,6 +1221,17 @@ header {
 }
 .chat-send:hover { color: var(--text); }
 
+.chat-new {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 9px;
+  cursor: pointer;
+  padding: 2px 4px;
+  transition: color 0.15s;
+}
+.chat-new:hover { color: var(--text); }
+
 .chat-rl {
   font-size: 9px;
   color: var(--red);
@@ -1233,6 +1346,71 @@ header {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--dim); border-radius: 2px; }
 
+/* ── Subscribe ── */
+.subscribe-section {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+
+.subscribe-box {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 16px 20px;
+  max-width: 480px;
+}
+
+.subscribe-desc {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0 0 12px;
+}
+
+.subscribe-row {
+  display: flex;
+  gap: 8px;
+}
+
+.subscribe-input {
+  flex: 1;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 7px 10px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.subscribe-input:focus { border-color: #00d4ff; }
+.subscribe-input::placeholder { color: var(--dim); }
+
+.subscribe-btn {
+  background: #00d4ff18;
+  border: 1px solid #00d4ff40;
+  border-radius: 3px;
+  color: #00d4ff;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  padding: 7px 14px;
+  cursor: pointer;
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+.subscribe-btn:hover { background: #00d4ff30; }
+
+.subscribe-msg {
+  font-size: 11px;
+  margin-top: 8px;
+  min-height: 16px;
+}
+.subscribe-msg.ok  { color: var(--green); }
+.subscribe-msg.err { color: var(--red); }
+
 /* ── Data sources ── */
 .sources-section {
   margin-top: 24px;
@@ -1318,14 +1496,15 @@ def generate(prices: dict = None):
 
     now          = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
     cards        = "\n".join(_profile_card(k, p, prices) for k, p in PROFILES.items())
-    sources_html = _data_sources_panel()
+    sources_html  = _data_sources_panel()
+    subscribe_html = ""
 
     html = f"""<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AI Investor — Dashboard</title>
+<title>CryptoAiArena — Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
@@ -1338,10 +1517,30 @@ def generate(prices: dict = None):
   <div class="header-left">
     <div class="header-title">
       <span class="live-dot"></span>
-      <span class="ai">AI</span><span class="sep">/</span>Investor
+      Crypto<span class="ai">Ai</span>Arena
     </div>
     <div class="header-meta">Paper trading · 3 agentes</div>
   </div>
+
+  <div class="header-center">
+    <div class="header-subscribe">
+      <div class="sub-tooltip-wrap">
+        <input class="subscribe-input" id="sub-email" type="email" placeholder="tu@email.com"
+          onkeydown="if(event.key==='Enter')subscribe()">
+        <div class="sub-tooltip">
+          <strong>Alertas por email</strong>
+          <ul>
+            <li>📊 Resumen diario a las 18:00 UTC</li>
+            <li>⚡ Alertas de mercado (Fear &amp; Greed extremo, trades grandes)</li>
+          </ul>
+          Máx. 2-3 emails/día. Baja cuando quieras.
+        </div>
+      </div>
+      <button class="subscribe-btn" onclick="subscribe()">Recibir alertas</button>
+    </div>
+    <div class="subscribe-msg" id="sub-msg"></div>
+  </div>
+
   <div class="header-right">
     <div class="header-ts">
       <span class="ts" id="localTime">{now}</span>
@@ -1356,6 +1555,8 @@ def generate(prices: dict = None):
 <div class="grid">
 {cards}
 </div>
+
+{subscribe_html}
 
 {sources_html}
 
@@ -1417,7 +1618,7 @@ def generate(prices: dict = None):
   }}
 }})();
 
-const CHAT_API = window.location.protocol + '//' + window.location.hostname + ':5001';
+const CHAT_API = window.location.protocol + '//' + window.location.hostname;
 
 if (typeof marked !== 'undefined') {{
   marked.use({{ mangle: false, headerIds: false, breaks: true }});
@@ -1433,6 +1634,10 @@ function _appendMsg(msgsEl, role, text) {{
   msgsEl.appendChild(el);
   msgsEl.scrollTop = msgsEl.scrollHeight;
   return el;
+}}
+
+function clearChat(profileKey) {{
+  document.getElementById('chat-msgs-' + profileKey).innerHTML = '';
 }}
 
 async function sendChat(profileKey) {{
@@ -1502,6 +1707,31 @@ function toggleTheme() {{
   localStorage.setItem('theme', isLight ? 'light' : 'dark');
   document.getElementById('themeBtn').textContent = isLight ? '🌙' : '☀️';
   if (window._rebuildChart) window._rebuildChart();
+}}
+
+async function subscribe() {{
+  const input = document.getElementById('sub-email');
+  const msg   = document.getElementById('sub-msg');
+  const email = (input.value || '').trim();
+  if (!email) return;
+  msg.className = 'subscribe-msg';
+  msg.textContent = '...';
+  try {{
+    const res  = await fetch(CHAT_API + '/api/subscribe', {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{ email }}),
+    }});
+    const data = await res.json();
+    msg.className = 'subscribe-msg ' + (data.ok ? 'ok' : 'err');
+    msg.textContent = data.ok
+      ? '✓ Revisa tu email y confirma la suscripción.'
+      : (data.message || 'Error al suscribirse.');
+    if (data.ok) input.value = '';
+  }} catch(e) {{
+    msg.className = 'subscribe-msg err';
+    msg.textContent = 'No se pudo conectar.';
+  }}
 }}
 </script>
 

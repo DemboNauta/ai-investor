@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(python -c \"import data, agent; print\\('OK'\\)\")",
-      "Bash(python generate_report.py)"
+      "Bash(python generate_report.py)",
+      "PowerShell(curl -s -o $null -w \"Status: %{http_code}`nIP: %{remote_ip}`n\" http://cryptoaiarena.com 2>&1)",
+      "PowerShell(curl -s -o $null -w \"Direct IP status: %{http_code}`n\" -H \"Host: cryptoaiarena.com\" http://178.104.140.243 2>&1)"
     ]
   }
 }
