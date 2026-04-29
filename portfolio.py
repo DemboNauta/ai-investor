@@ -80,6 +80,7 @@ def sell(portfolio: dict, coin_id: str, amount_eur: float, price: float) -> tupl
 
     pos = portfolio["holdings"][coin_id]
     current_value = pos["amount"] * price
+    avg_buy_price = pos["avg_buy_price_eur"]
 
     # -1 means sell all
     if amount_eur < 0 or amount_eur >= current_value:
@@ -100,6 +101,7 @@ def sell(portfolio: dict, coin_id: str, amount_eur: float, price: float) -> tupl
         "amount_eur": amount_eur,
         "coin_amount": coin_amount,
         "price_eur": price,
+        "avg_buy_price_eur": avg_buy_price,
     })
     return True, f"Sold {coin_amount:.6f} {coin_id} for €{amount_eur:.2f} @ €{price:.4f}"
 

@@ -24,6 +24,7 @@ $FILES = @(
     "notifier.py",
     "subscribers.py",
     "daily_digest.py",
+    "bluesky_bot.py",
     "backup.sh"
 )
 
@@ -41,10 +42,20 @@ scp @SSH_ARGS (Join-Path $LOCAL_DIR ".env") "${SSH_TARGET}:${REMOTE_DIR}/.env"
 Write-Host "    .env" -ForegroundColor Gray
 
 
+# Subir OG image y archivos estáticos SEO
+Write-Host "    assets/img/og.png" -ForegroundColor Gray
+ssh @SSH_ARGS $SSH_TARGET "mkdir -p /var/www/ai-investor/assets/img"
+scp @SSH_ARGS (Join-Path $LOCAL_DIR "assets\img\og.png")      "${SSH_TARGET}:/var/www/ai-investor/assets/img/og.png"
+scp @SSH_ARGS (Join-Path $LOCAL_DIR "assets\img\favicon.png") "${SSH_TARGET}:/var/www/ai-investor/assets/img/favicon.png"
+Write-Host "    robots.txt / sitemap.xml / llms.txt" -ForegroundColor Gray
+scp @SSH_ARGS (Join-Path $LOCAL_DIR "web\robots.txt")  "${SSH_TARGET}:/var/www/ai-investor/robots.txt"
+scp @SSH_ARGS (Join-Path $LOCAL_DIR "web\sitemap.xml") "${SSH_TARGET}:/var/www/ai-investor/sitemap.xml"
+scp @SSH_ARGS (Join-Path $LOCAL_DIR "web\llms.txt")    "${SSH_TARGET}:/var/www/ai-investor/llms.txt"
+
 # 2. Instalar dependencias nuevas si hacen falta
 Write-Host ""
 Write-Host "==> [2/5] Verificando dependencias..." -ForegroundColor Cyan
-ssh @SSH_ARGS $SSH_TARGET "cd $REMOTE_DIR && source venv/bin/activate && pip install openai --quiet"
+ssh @SSH_ARGS $SSH_TARGET "cd $REMOTE_DIR && source venv/bin/activate && pip install openai atproto --quiet"
 
 # 3. Verificar sintaxis
 Write-Host ""

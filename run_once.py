@@ -218,7 +218,7 @@ def main(profile_key: str = "moderate"):
     # Post-cycle reflection
     print(f"  [{profile['name']}] Running post-cycle reflection...")
     try:
-        reflection_memories = agent.run_reflection(
+        reflection_memories, reflection_thesis = agent.run_reflection(
             profile_name=profile["name"],
             system_prompt=profile["system_prompt"],
             cycle=cycle,
@@ -237,6 +237,9 @@ def main(profile_key: str = "moderate"):
                 m["importance"], pnl_pct=delta_pct,
                 regime=current_regime_label, fear_greed=fg_val, btc_dominance=btcd,
             )
+        if reflection_thesis:
+            mem.update_thesis(profile_memory, reflection_thesis)
+            print(f"  [{profile['name']}] Thesis updated: {reflection_thesis[:80]}")
         if reflection_memories:
             print(f"  [{profile['name']}] {len(reflection_memories)} reflection memory/memories saved")
     except Exception as e:
@@ -285,6 +288,18 @@ def main(profile_key: str = "moderate"):
         )
     except Exception as e:
         print(f"  [alert] Error: {e}")
+
+    try:
+        import bluesky_bot
+        bluesky_bot.maybe_post_cycle(
+            profile_key=profile_key,
+            activity_log=activity_log,
+            total_eur=value_after,
+            pnl_pct=pnl_pct,
+            summary=summary,
+        )
+    except Exception as e:
+        print(f"  [bluesky] Error: {e}")
 
     print("Done.")
 

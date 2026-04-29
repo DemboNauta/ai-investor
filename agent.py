@@ -226,7 +226,7 @@ TOOLS = [
     _UPDATE_THESIS_TOOL,
 ]
 
-REFLECTION_TOOLS = [_REMEMBER_TOOL, _DONE_REFLECTING_TOOL]
+REFLECTION_TOOLS = [_REMEMBER_TOOL, _UPDATE_THESIS_TOOL, _DONE_REFLECTING_TOOL]
 
 
 def run_cycle(
@@ -424,8 +424,8 @@ def run_reflection(
     memory_prompt: str,
     llm_client=None,
     llm_model: str = None,
-) -> list[dict]:
-    """Post-cycle reflection. LLM sees results and writes memories. Returns new memory entries."""
+) -> tuple[list[dict], str]:
+    """Post-cycle reflection. LLM sees results and writes memories. Returns (new memory entries, updated thesis)."""
     _client = llm_client or client
     _model = llm_model or MODEL
 
@@ -452,6 +452,7 @@ Reflect on this cycle. Call remember() for insights worth keeping:
 - Whether your prior knowledge held up
 
 Be selective — 1-4 memories per cycle is enough. Only save genuinely useful insights.
+Also call update_thesis() every cycle to record your current macro view (bull/bear/sideways, key levels, what you expect next).
 Call done_reflecting() when finished."""
 
     messages = [
@@ -460,6 +461,7 @@ Call done_reflecting() when finished."""
     ]
 
     new_memories = []
+    new_thesis = ""
     max_iterations = 10
 
     for _ in range(max_iterations):
@@ -491,6 +493,10 @@ Call done_reflecting() when finished."""
                 })
                 result = "Memory saved."
 
+            elif fn == "update_thesis":
+                new_thesis = args.get("thesis", "").strip()
+                result = "Thesis updated."
+
             elif fn == "done_reflecting":
                 finished = True
                 result = "Reflection complete."
@@ -509,7 +515,7 @@ Call done_reflecting() when finished."""
         if finished:
             break
 
-    return new_memories
+    return new_memories, new_thesis
 
 
 def run_summarization(profile_name: str, system_prompt: str, raw_entries_text: str, llm_client=None, llm_model: str = None) -> list[dict]:

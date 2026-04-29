@@ -6,15 +6,21 @@ DEST=$BACKUP_DIR/$DATE
 
 mkdir -p "$DEST"
 
-cp $DIR/portfolio_moderate.json   "$DEST/" 2>/dev/null
-cp $DIR/portfolio_aggressive.json "$DEST/" 2>/dev/null
-cp $DIR/portfolio_degen.json      "$DEST/" 2>/dev/null
-cp $DIR/history_moderate.json     "$DEST/" 2>/dev/null
-cp $DIR/history_aggressive.json   "$DEST/" 2>/dev/null
-cp $DIR/history_degen.json        "$DEST/" 2>/dev/null
-cp $DIR/memory_moderate.md        "$DEST/" 2>/dev/null
-cp $DIR/memory_aggressive.md      "$DEST/" 2>/dev/null
-cp $DIR/memory_degen.md           "$DEST/" 2>/dev/null
+cp $DIR/portfolio_moderate.json          "$DEST/" 2>/dev/null
+cp $DIR/portfolio_aggressive.json        "$DEST/" 2>/dev/null
+cp $DIR/portfolio_degen.json             "$DEST/" 2>/dev/null
+cp $DIR/portfolio_moderate_openai.json   "$DEST/" 2>/dev/null
+cp $DIR/portfolio_aggressive_openai.json "$DEST/" 2>/dev/null
+cp $DIR/portfolio_degen_openai.json      "$DEST/" 2>/dev/null
+cp $DIR/history_moderate.json            "$DEST/" 2>/dev/null
+cp $DIR/history_aggressive.json          "$DEST/" 2>/dev/null
+cp $DIR/history_degen.json               "$DEST/" 2>/dev/null
+cp $DIR/history_moderate_openai.json     "$DEST/" 2>/dev/null
+cp $DIR/history_aggressive_openai.json   "$DEST/" 2>/dev/null
+cp $DIR/history_degen_openai.json        "$DEST/" 2>/dev/null
+cp $DIR/memory_moderate.md               "$DEST/" 2>/dev/null
+cp $DIR/memory_aggressive.md             "$DEST/" 2>/dev/null
+cp $DIR/memory_degen.md                  "$DEST/" 2>/dev/null
 cp $DIR/chat_history.db           "$DEST/" 2>/dev/null
 cp $DIR/subscribers.db            "$DEST/" 2>/dev/null
 cp $DIR/alert_state.json          "$DEST/" 2>/dev/null

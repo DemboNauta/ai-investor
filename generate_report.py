@@ -2,6 +2,7 @@
 import os
 import re
 import json
+import shutil
 import html as html_module
 import urllib.request
 import urllib.parse
@@ -155,11 +156,24 @@ def _trade_items(trades: list, last_run: str = "") -> str:
     def _row(t):
         a  = t["action"]
         ts = t["ts"][:16].replace("T", " ")
+        sell_price = t.get("price_eur", 0)
+        avg_buy    = t.get("avg_buy_price_eur")
+        if a == "sell" and avg_buy:
+            pnl_pct = (sell_price - avg_buy) / avg_buy * 100 if avg_buy > 0 else 0
+            pnl_cls = "pos" if pnl_pct >= 0 else "neg"
+            price_html = (
+                f'<span class="trade-price">'
+                f'{_eur(avg_buy)} → {_eur(sell_price)}'
+                f'</span>'
+                f'<span class="trade-pnl {pnl_cls}">{pnl_pct:+.1f}%</span>'
+            )
+        else:
+            price_html = f'<span class="trade-price">@ {_eur(sell_price)}</span>'
         return f"""<div class="trade-item {a}">
           <span class="trade-action {a}">{a.upper()}</span>
           <span class="trade-coin">{html_module.escape(t['coin_id'])}</span>
           <span class="trade-eur">{_eur(t['amount_eur'])}</span>
-          <span class="trade-price">@ {_eur(t['price_eur'])}</span>
+          {price_html}
           <span class="trade-ts">{ts}</span>
         </div>"""
 
@@ -1217,6 +1231,9 @@ header {
 .trade-coin  { color: var(--text); flex: 1; font-size: 11px; text-transform: uppercase; min-width: 60px; }
 .trade-eur   { color: var(--text); font-weight: 500; }
 .trade-price { color: var(--muted); font-size: 10px; }
+.trade-pnl   { font-size: 10px; font-weight: 600; margin-left: 4px; }
+.trade-pnl.pos { color: var(--green); }
+.trade-pnl.neg { color: var(--red); }
 .trade-ts    { color: var(--muted); font-size: 10px; margin-left: auto; opacity: 0.7; }
 
 /* ── No data ── */
@@ -2218,7 +2235,46 @@ def generate(prices: dict = None):
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>CryptoAiArena — Dashboard</title>
+<title>CryptoAiArena — Grok vs GPT: Batalla de IAs en Crypto Paper Trading</title>
+<meta name="description" content="6 agentes de IA (Grok vs GPT-4o) compiten en paper trading de criptomonedas en tiempo real. Sigue el rendimiento de cada portafolio, decisiones de compra/venta y estadísticas en vivo.">
+<meta name="robots" content="index, follow">
+<link rel="canonical" href="https://cryptoaiarena.com/">
+<link rel="icon" type="image/png" href="/assets/img/favicon.png">
+<link rel="apple-touch-icon" href="/assets/img/favicon.png">
+<!-- Open Graph -->
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://cryptoaiarena.com/">
+<meta property="og:title" content="CryptoAiArena — Grok vs GPT: Batalla de IAs en Crypto">
+<meta property="og:description" content="6 agentes de IA compiten en paper trading de criptomonedas. Grok 4.1 vs GPT-4o mini — ¿quién gana más dinero?">
+<meta property="og:image" content="https://cryptoaiarena.com/assets/img/og.png">
+<meta property="og:site_name" content="CryptoAiArena">
+<meta property="og:locale" content="es_ES">
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="CryptoAiArena — Grok vs GPT en Crypto Paper Trading">
+<meta name="twitter:description" content="6 agentes de IA compiten en paper trading de criptomonedas en tiempo real. ¿Qué modelo gana más?">
+<meta name="twitter:image" content="https://cryptoaiarena.com/assets/img/og.png">
+<!-- Structured data -->
+<script type="application/ld+json">
+{{
+  "@context": "https://schema.org",
+  "@type": "WebApplication",
+  "name": "CryptoAiArena",
+  "url": "https://cryptoaiarena.com",
+  "description": "6 agentes de inteligencia artificial (Grok 4.1 vs GPT-4o mini) compiten en paper trading de criptomonedas. Portafolios en tiempo real, decisiones autónomas, comparativa de modelos.",
+  "applicationCategory": "FinanceApplication",
+  "operatingSystem": "Web",
+  "offers": {{
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "EUR"
+  }},
+  "author": {{
+    "@type": "Person",
+    "name": "Edgar Milá"
+  }}
+}}
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
@@ -2595,6 +2651,16 @@ async function subscribe() {{
     with open(out, "w", encoding="utf-8") as f:
         f.write(html)
     print(f"[report] Generado: {out}")
+
+    # Publicar memorias de agentes como archivos estáticos para LLM crawlers
+    base_dir = os.path.dirname(__file__)
+    for profile_key in PROFILES:
+        mem_src = os.path.join(base_dir, f"memory_{profile_key}.md")
+        if os.path.exists(mem_src):
+            agent_dir = os.path.join(WEB_DIR, "agents", profile_key)
+            os.makedirs(agent_dir, exist_ok=True)
+            shutil.copy2(mem_src, os.path.join(agent_dir, "memory.md"))
+    print("[report] Memorias de agentes publicadas en /agents/")
 
 
 if __name__ == "__main__":

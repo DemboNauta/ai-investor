@@ -232,6 +232,13 @@ def build_and_send() -> int:
     subject = f"[CryptoAiArena] Resumen diario — {now}"
     sent = notifier.send_bulk(recipients, subject, notifier._wrap(content, "Resumen diario", now))
     print(f"[digest] Enviado a {sent}/{len(recipients)} suscriptores.")
+
+    try:
+        import bluesky_bot
+        bluesky_bot.post_daily(prices=prices)
+    except Exception as e:
+        print(f"[digest] Bluesky error: {e}")
+
     return sent
 
 
