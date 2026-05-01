@@ -2118,6 +2118,11 @@ header {
   line-height: 1.5;
 }
 
+body.light .chat-msg.user {
+  background: #dde0f0;
+  color: #111128;
+}
+
 body.light .modal-disclaimer {
   background: rgba(180,120,0,0.07);
   border-color: rgba(180,120,0,0.25);

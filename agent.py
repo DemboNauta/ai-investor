@@ -229,185 +229,269 @@ TOOLS = [
 REFLECTION_TOOLS = [_REMEMBER_TOOL, _UPDATE_THESIS_TOOL, _DONE_REFLECTING_TOOL]
 
 
+# ── Tool format converters ─────────────────────────────────────────────────────
+
+def _to_responses_tool(t: dict) -> dict:
+    """Chat Completions format → OpenAI Responses API format."""
+    fn = t["function"]
+    return {"type": "function", "name": fn["name"], "description": fn["description"], "parameters": fn["parameters"]}
+
+
+def _to_xai_tool(t: dict):
+    """Chat Completions format → xAI SDK tool proto."""
+    from xai_sdk.chat import tool as _xai_tool
+    fn = t["function"]
+    return _xai_tool(fn["name"], fn["description"], fn["parameters"])
+
+
+# ── Shared tool executors ──────────────────────────────────────────────────────
+
+def _exec_trade_tool(fn: str, args_str: str, portfolio: dict, prices: dict, mem: dict,
+                     trade_log: list, activity_log: list, in_cycle_memories: list) -> tuple[str, bool]:
+    """Execute one trading tool call. Returns (result_str, is_done)."""
+    args = json.loads(args_str)
+
+    if fn == "done":
+        summary_val = args.get("summary", "")
+        activity_log.append({"tool": "done", "args": args, "result": "Cycle complete.", "status": "ok", "_summary": summary_val})
+        return "Cycle complete.", True
+
+    elif fn == "buy":
+        coin_id = args["coin_id"]
+        amount_eur = float(args["amount_eur"])
+        reasoning = args.get("reasoning", "")
+        price = prices.get(coin_id)
+        if price is None:
+            result = f"ERROR: unknown coin '{coin_id}' — not in market data"
+            status = "error"
+        elif amount_eur < MIN_TRADE_EUR:
+            result = f"ERROR: minimum trade is €{MIN_TRADE_EUR}"
+            status = "error"
+        else:
+            ok, result = pf.buy(portfolio, coin_id, amount_eur, price)
+            status = "ok" if ok else "error"
+            if ok:
+                trade_log.append(f"BUY  {coin_id:<15} €{amount_eur:.2f} — {reasoning}")
+        activity_log.append({"tool": "buy", "coin_id": coin_id, "amount_eur": amount_eur,
+                              "price": price, "reasoning": reasoning, "result": result, "status": status})
+        return result, False
+
+    elif fn == "sell":
+        coin_id = args["coin_id"]
+        amount_eur = float(args["amount_eur"])
+        reasoning = args.get("reasoning", "")
+        price = prices.get(coin_id)
+        if price is None:
+            result = f"ERROR: unknown coin '{coin_id}'"
+            status = "error"
+        else:
+            ok, result = pf.sell(portfolio, coin_id, amount_eur, price)
+            status = "ok" if ok else "error"
+            if ok:
+                trade_log.append(f"SELL {coin_id:<15} €{amount_eur:.2f} — {reasoning}")
+        activity_log.append({"tool": "sell", "coin_id": coin_id, "amount_eur": amount_eur,
+                              "price": price, "reasoning": reasoning, "result": result, "status": status})
+        return result, False
+
+    elif fn == "update_thesis":
+        thesis = args.get("thesis", "").strip()
+        if mem is not None:
+            import memory as _mem
+            _mem.update_thesis(mem, thesis)
+        result = f"Thesis updated: {thesis}"
+        activity_log.append({"tool": "update_thesis", "args": args, "result": result, "status": "ok"})
+        return result, False
+
+    elif fn == "remember":
+        in_cycle_memories.append({
+            "content": args["content"],
+            "category": args["category"],
+            "importance": args.get("importance", 2),
+        })
+        activity_log.append({"tool": "remember", "args": args, "result": "Memory saved.", "status": "ok"})
+        return "Memory saved.", False
+
+    elif fn == "fetch_news":
+        keyword = args.get("filter_keyword", "").strip().lower()
+        headlines = market_data.get_crypto_news(max_items=8)
+        if keyword:
+            headlines = [h for h in headlines if keyword in h.lower()]
+        result = ("RECENT NEWS:\n" + "\n".join(f"• {h}" for h in headlines)) if headlines else \
+                 f"No news found{' for keyword: ' + keyword if keyword else ''}."
+        activity_log.append({"tool": "fetch_news", "args": args, "result": f"{len(headlines)} headlines", "status": "ok"})
+        return result, False
+
+    elif fn == "get_coin_details":
+        coin_id = args["coin_id"]
+        try:
+            import requests as _req
+            resp = _req.get(
+                f"https://api.coingecko.com/api/v3/coins/{coin_id}",
+                params={"localization": "false", "tickers": "false", "community_data": "true", "developer_data": "true"},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            d = resp.json()
+            desc = (d.get("description", {}).get("en") or "")[:400].replace("\r\n", " ")
+            cats = ", ".join((d.get("categories") or [])[:5])
+            dev = d.get("developer_data", {})
+            comm = d.get("community_data", {})
+            result = (
+                f"COIN: {d.get('name')} ({d.get('symbol', '').upper()})\n"
+                f"Description: {desc}...\n"
+                f"Categories: {cats}\n"
+                f"GitHub stars: {dev.get('stars', 'n/a')} | Forks: {dev.get('forks', 'n/a')} | "
+                f"Commits 4w: {dev.get('commit_count_4_weeks', 'n/a')}\n"
+                f"Twitter followers: {comm.get('twitter_followers', 'n/a')} | "
+                f"Reddit subscribers: {comm.get('reddit_subscribers', 'n/a')}\n"
+                f"Exchange listings: {len(d.get('tickers') or [])}"
+            )
+            activity_log.append({"tool": "get_coin_details", "coin_id": coin_id, "result": "ok", "status": "ok"})
+        except Exception as e:
+            result = f"ERROR fetching details for '{coin_id}': {e}"
+            activity_log.append({"tool": "get_coin_details", "coin_id": coin_id, "result": result, "status": "error"})
+        return result, False
+
+    else:
+        result = f"unknown tool: {fn}"
+        activity_log.append({"tool": fn, "args": args, "result": result, "status": "error"})
+        return result, False
+
+
+def _exec_reflection_tool(fn: str, args_str: str, new_memories: list, thesis_holder: list) -> tuple[str, bool]:
+    """Execute one reflection tool call. Returns (result_str, is_done). thesis_holder = [str] mutable."""
+    args = json.loads(args_str)
+
+    if fn == "remember":
+        new_memories.append({
+            "content": args["content"],
+            "category": args["category"],
+            "importance": args.get("importance", 2),
+        })
+        return "Memory saved.", False
+
+    elif fn == "update_thesis":
+        thesis_holder[0] = args.get("thesis", "").strip()
+        return "Thesis updated.", False
+
+    elif fn == "done_reflecting":
+        return "Reflection complete.", True
+
+    else:
+        return f"unknown tool: {fn}", False
+
+
+# ── Provider-specific loop implementations ────────────────────────────────────
+
+def _loop_openai(oai_client, model: str, system_prompt: str, user_msg: str,
+                 tools: list, max_iters: int, exec_fn) -> str:
+    """Stateful loop using OpenAI Responses API. Returns final text or summary."""
+    tools_r = [_to_responses_tool(t) for t in tools]
+
+    response = oai_client.responses.create(
+        model=model,
+        instructions=system_prompt,
+        input=user_msg,
+        tools=tools_r,
+    )
+
+    summary = ""
+    for _ in range(max_iters):
+        tool_calls = [item for item in response.output if item.type == "function_call"]
+        if not tool_calls:
+            break
+
+        tool_outputs = []
+        is_done = False
+        for item in tool_calls:
+            result, done = exec_fn(item.name, item.arguments)
+            tool_outputs.append({"type": "function_call_output", "call_id": item.call_id, "output": result})
+            if done:
+                is_done = True
+
+        if is_done:
+            break
+
+        response = oai_client.responses.create(
+            model=model,
+            input=tool_outputs,
+            previous_response_id=response.id,
+            tools=tools_r,
+        )
+
+    return summary
+
+
+def _loop_xai(xai_client, model: str, system_prompt: str, user_msg: str,
+              tools: list, max_iters: int, exec_fn) -> str:
+    """Stateful loop using xAI SDK. Returns final text."""
+    from xai_sdk.chat import user as _user, system as _system, tool_result as _tool_result
+
+    tools_x = [_to_xai_tool(t) for t in tools]
+
+    chat = xai_client.chat.create(model=model, store_messages=True, tools=tools_x)
+    chat.append(_system(system_prompt))
+    chat.append(_user(user_msg))
+    response = chat.sample()
+
+    for _ in range(max_iters):
+        if not response.tool_calls:
+            break
+
+        next_chat = xai_client.chat.create(
+            model=model, store_messages=True,
+            previous_response_id=response.id, tools=tools_x,
+        )
+        is_done = False
+        for tc in response.tool_calls:
+            result, done = exec_fn(tc.function.name, tc.function.arguments)
+            next_chat.append(_tool_result(result, tool_call_id=tc.id))
+            if done:
+                is_done = True
+
+        if is_done:
+            break
+
+        response = next_chat.sample()
+
+    return response.content if not response.tool_calls else ""
+
+
+# ── Public API ────────────────────────────────────────────────────────────────
+
 def run_cycle(
     portfolio: dict,
-    market_text: str,
+    market_text: str,  # kept for API compat; now embedded in system_prompt by caller
     prices: dict[str, float],
     system_prompt: str = None,
     mem: dict = None,
     llm_client=None,
     llm_model: str = None,
+    provider: str = "xai",
 ) -> tuple[dict, list[str], str, list[dict], list[dict]]:
-    """Run one trading cycle. Returns updated portfolio, trade log, agent summary, activity log, in-cycle memories."""
     _client = llm_client or client
     _model = llm_model or MODEL
+    active_prompt = system_prompt or SYSTEM_PROMPT
 
     portfolio_text = pf.format_portfolio_for_llm(portfolio, prices)
-    user_msg = f"{portfolio_text}\n\n{market_text}\n\nAnalyze the market and execute trades. Call done() when finished."
+    user_msg = f"{portfolio_text}\n\nAnalyze the market and execute trades. Call done() when finished."
 
-    active_prompt = system_prompt or SYSTEM_PROMPT
-    messages = [
-        {"role": "system", "content": active_prompt},
-        {"role": "user", "content": user_msg},
-    ]
+    trade_log, activity_log, in_cycle_memories = [], [], []
 
-    trade_log = []
-    activity_log = []
-    in_cycle_memories = []
+    def exec_fn(fn, args_str):
+        return _exec_trade_tool(fn, args_str, portfolio, prices, mem,
+                                trade_log, activity_log, in_cycle_memories)
+
+    if provider == "openai":
+        _loop_openai(_client, _model, active_prompt, user_msg, TOOLS, 20, exec_fn)
+    else:
+        _loop_xai(_client, _model, active_prompt, user_msg, TOOLS, 20, exec_fn)
+
+    # Extract summary from done() call logged in activity_log
     summary = ""
-    max_iterations = 20
-
-    for _ in range(max_iterations):
-        response = _client.chat.completions.create(
-            model=_model,
-            messages=messages,
-            tools=TOOLS,
-            tool_choice="auto",
-        )
-
-        msg = response.choices[0].message
-        messages.append(msg)
-
-        if not msg.tool_calls:
-            break
-
-        tool_results = []
-        finished = False
-
-        for tc in msg.tool_calls:
-            args = json.loads(tc.function.arguments)
-            fn = tc.function.name
-
-            if fn == "done":
-                summary = args.get("summary", "")
-                finished = True
-                result = "Cycle complete."
-                activity_log.append({"tool": "done", "args": args, "result": result, "status": "ok"})
-
-            elif fn == "buy":
-                coin_id = args["coin_id"]
-                amount_eur = float(args["amount_eur"])
-                reasoning = args.get("reasoning", "")
-                price = prices.get(coin_id)
-
-                if price is None:
-                    result = f"ERROR: unknown coin '{coin_id}' — not in market data"
-                    status = "error"
-                elif amount_eur < MIN_TRADE_EUR:
-                    result = f"ERROR: minimum trade is €{MIN_TRADE_EUR}"
-                    status = "error"
-                else:
-                    ok, result = pf.buy(portfolio, coin_id, amount_eur, price)
-                    status = "ok" if ok else "error"
-                    if ok:
-                        trade_log.append(f"BUY  {coin_id:<15} €{amount_eur:.2f} — {reasoning}")
-
-                activity_log.append({
-                    "tool": "buy",
-                    "coin_id": coin_id,
-                    "amount_eur": amount_eur,
-                    "price": price,
-                    "reasoning": reasoning,
-                    "result": result,
-                    "status": status,
-                })
-
-            elif fn == "sell":
-                coin_id = args["coin_id"]
-                amount_eur = float(args["amount_eur"])
-                reasoning = args.get("reasoning", "")
-                price = prices.get(coin_id)
-
-                if price is None:
-                    result = f"ERROR: unknown coin '{coin_id}'"
-                    status = "error"
-                else:
-                    ok, result = pf.sell(portfolio, coin_id, amount_eur, price)
-                    status = "ok" if ok else "error"
-                    if ok:
-                        trade_log.append(f"SELL {coin_id:<15} €{amount_eur:.2f} — {reasoning}")
-
-                activity_log.append({
-                    "tool": "sell",
-                    "coin_id": coin_id,
-                    "amount_eur": amount_eur,
-                    "price": price,
-                    "reasoning": reasoning,
-                    "result": result,
-                    "status": status,
-                })
-
-            elif fn == "update_thesis":
-                thesis = args.get("thesis", "").strip()
-                if mem is not None:
-                    import memory as _mem
-                    _mem.update_thesis(mem, thesis)
-                result = f"Thesis updated: {thesis}"
-                activity_log.append({"tool": "update_thesis", "args": args, "result": result, "status": "ok"})
-
-            elif fn == "remember":
-                in_cycle_memories.append({
-                    "content": args["content"],
-                    "category": args["category"],
-                    "importance": args.get("importance", 2),
-                })
-                result = "Memory saved."
-                activity_log.append({"tool": "remember", "args": args, "result": result, "status": "ok"})
-
-            elif fn == "fetch_news":
-                keyword = args.get("filter_keyword", "").strip().lower()
-                headlines = market_data.get_crypto_news(max_items=15)
-                if keyword:
-                    headlines = [h for h in headlines if keyword in h.lower()]
-                if headlines:
-                    result = "RECENT NEWS:\n" + "\n".join(f"• {h}" for h in headlines)
-                else:
-                    result = f"No news found{' for keyword: ' + keyword if keyword else ''}."
-                activity_log.append({"tool": "fetch_news", "args": args, "result": f"{len(headlines)} headlines", "status": "ok"})
-
-            elif fn == "get_coin_details":
-                coin_id = args["coin_id"]
-                try:
-                    import requests as _req
-                    resp = _req.get(
-                        f"https://api.coingecko.com/api/v3/coins/{coin_id}",
-                        params={"localization": "false", "tickers": "false", "community_data": "true", "developer_data": "true"},
-                        timeout=15,
-                    )
-                    resp.raise_for_status()
-                    d = resp.json()
-                    desc = (d.get("description", {}).get("en") or "")[:400].replace("\r\n", " ")
-                    cats = ", ".join((d.get("categories") or [])[:5])
-                    dev = d.get("developer_data", {})
-                    comm = d.get("community_data", {})
-                    result = (
-                        f"COIN: {d.get('name')} ({d.get('symbol', '').upper()})\n"
-                        f"Description: {desc}...\n"
-                        f"Categories: {cats}\n"
-                        f"GitHub stars: {dev.get('stars', 'n/a')} | Forks: {dev.get('forks', 'n/a')} | "
-                        f"Commits 4w: {dev.get('commit_count_4_weeks', 'n/a')}\n"
-                        f"Twitter followers: {comm.get('twitter_followers', 'n/a')} | "
-                        f"Reddit subscribers: {comm.get('reddit_subscribers', 'n/a')}\n"
-                        f"Exchange listings: {len(d.get('tickers') or [])}"
-                    )
-                    activity_log.append({"tool": "get_coin_details", "coin_id": coin_id, "result": "ok", "status": "ok"})
-                except Exception as e:
-                    result = f"ERROR fetching details for '{coin_id}': {e}"
-                    activity_log.append({"tool": "get_coin_details", "coin_id": coin_id, "result": result, "status": "error"})
-
-            else:
-                result = f"unknown tool: {fn}"
-                activity_log.append({"tool": fn, "args": args, "result": result, "status": "error"})
-
-            tool_results.append({
-                "role": "tool",
-                "tool_call_id": tc.id,
-                "content": result,
-            })
-
-        messages.extend(tool_results)
-
-        if finished:
+    for entry in activity_log:
+        if entry.get("tool") == "done":
+            summary = entry.get("_summary", "") or entry.get("args", {}).get("summary", "")
             break
 
     return portfolio, trade_log, summary, activity_log, in_cycle_memories
@@ -424,8 +508,8 @@ def run_reflection(
     memory_prompt: str,
     llm_client=None,
     llm_model: str = None,
+    provider: str = "xai",
 ) -> tuple[list[dict], str]:
-    """Post-cycle reflection. LLM sees results and writes memories. Returns (new memory entries, updated thesis)."""
     _client = llm_client or client
     _model = llm_model or MODEL
 
@@ -455,71 +539,28 @@ Be selective — 1-4 memories per cycle is enough. Only save genuinely useful in
 Also call update_thesis() every cycle to record your current macro view (bull/bear/sideways, key levels, what you expect next).
 Call done_reflecting() when finished."""
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_msg},
-    ]
-
     new_memories = []
-    new_thesis = ""
-    max_iterations = 10
+    thesis_holder = [""]
 
-    for _ in range(max_iterations):
-        response = _client.chat.completions.create(
-            model=_model,
-            messages=messages,
-            tools=REFLECTION_TOOLS,
-            tool_choice="auto",
-        )
+    def exec_fn(fn, args_str):
+        return _exec_reflection_tool(fn, args_str, new_memories, thesis_holder)
 
-        msg = response.choices[0].message
-        messages.append(msg)
+    if provider == "openai":
+        _loop_openai(_client, _model, system_prompt, user_msg, REFLECTION_TOOLS, 10, exec_fn)
+    else:
+        _loop_xai(_client, _model, system_prompt, user_msg, REFLECTION_TOOLS, 10, exec_fn)
 
-        if not msg.tool_calls:
-            break
-
-        tool_results = []
-        finished = False
-
-        for tc in msg.tool_calls:
-            args = json.loads(tc.function.arguments)
-            fn = tc.function.name
-
-            if fn == "remember":
-                new_memories.append({
-                    "content": args["content"],
-                    "category": args["category"],
-                    "importance": args.get("importance", 2),
-                })
-                result = "Memory saved."
-
-            elif fn == "update_thesis":
-                new_thesis = args.get("thesis", "").strip()
-                result = "Thesis updated."
-
-            elif fn == "done_reflecting":
-                finished = True
-                result = "Reflection complete."
-
-            else:
-                result = f"unknown tool: {fn}"
-
-            tool_results.append({
-                "role": "tool",
-                "tool_call_id": tc.id,
-                "content": result,
-            })
-
-        messages.extend(tool_results)
-
-        if finished:
-            break
-
-    return new_memories, new_thesis
+    return new_memories, thesis_holder[0]
 
 
-def run_summarization(profile_name: str, system_prompt: str, raw_entries_text: str, llm_client=None, llm_model: str = None) -> list[dict]:
-    """Distill many raw memories into summary entries. Returns new summary memory entries."""
+def run_summarization(
+    profile_name: str,
+    system_prompt: str,
+    raw_entries_text: str,
+    llm_client=None,
+    llm_model: str = None,
+    provider: str = "xai",
+) -> list[dict]:
     _client = llm_client or client
     _model = llm_model or MODEL
 
@@ -534,59 +575,26 @@ RAW MEMORIES:
 
 Call done_reflecting() when done writing summaries."""
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_msg},
-    ]
-
     summaries = []
-    max_iterations = 15
+    thesis_holder = [""]
 
-    for _ in range(max_iterations):
-        response = _client.chat.completions.create(
-            model=_model,
-            messages=messages,
-            tools=REFLECTION_TOOLS,
-            tool_choice="auto",
-        )
-
-        msg = response.choices[0].message
-        messages.append(msg)
-
-        if not msg.tool_calls:
-            break
-
-        tool_results = []
-        finished = False
-
-        for tc in msg.tool_calls:
-            args = json.loads(tc.function.arguments)
-            fn = tc.function.name
-
-            if fn == "remember":
-                summaries.append({
-                    "content": args["content"],
-                    "category": "summary",
-                    "importance": 3,
-                })
-                result = "Summary saved."
-
-            elif fn == "done_reflecting":
-                finished = True
-                result = "Summarization complete."
-
-            else:
-                result = f"unknown tool: {fn}"
-
-            tool_results.append({
-                "role": "tool",
-                "tool_call_id": tc.id,
-                "content": result,
+    def exec_fn(fn, args_str):
+        # For summarization, remember() entries are all summaries
+        args = json.loads(args_str)
+        if fn == "remember":
+            summaries.append({
+                "content": args["content"],
+                "category": "summary",
+                "importance": 3,
             })
+            return "Summary saved.", False
+        elif fn == "done_reflecting":
+            return "Summarization complete.", True
+        return f"unknown tool: {fn}", False
 
-        messages.extend(tool_results)
-
-        if finished:
-            break
+    if provider == "openai":
+        _loop_openai(_client, _model, system_prompt, user_msg, REFLECTION_TOOLS, 15, exec_fn)
+    else:
+        _loop_xai(_client, _model, system_prompt, user_msg, REFLECTION_TOOLS, 15, exec_fn)
 
     return summaries

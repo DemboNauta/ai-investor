@@ -1,8 +1,13 @@
 import requests
 import xml.etree.ElementTree as ET
 import re
+import json
+import os
+import time
 
 COINGECKO_BASE = "https://api.coingecko.com/api/v3"
+_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "market_cache.json")
+_CACHE_TTL_SECONDS = 55 * 60  # 55 minutes
 FEAR_GREED_URL = "https://api.alternative.me/fng/"
 
 _NEWS_FEEDS = [
@@ -89,6 +94,39 @@ def get_trending() -> list[dict]:
         ]
     except Exception:
         return []
+
+
+def get_all_market_data_cached(limit: int = 50) -> dict:
+    """Fetch all market data once and cache to disk. Reuse within TTL (55 min).
+    Returns dict with keys: coins, fear_greed, global_market, trending, funding_rates, macro, fetched_at.
+    """
+    if os.path.exists(_CACHE_FILE):
+        try:
+            with open(_CACHE_FILE, encoding="utf-8") as f:
+                cached = json.load(f)
+            age = time.time() - cached.get("fetched_at", 0)
+            if age < _CACHE_TTL_SECONDS:
+                return cached
+        except Exception:
+            pass
+
+    coins = get_market_data(limit=limit)
+    coins = enrich_with_indicators(coins)
+    data = {
+        "coins": coins,
+        "fear_greed": get_fear_greed(),
+        "global_market": get_global_market(),
+        "trending": get_trending(),
+        "funding_rates": get_funding_rates(),
+        "macro": get_macro_context(),
+        "fetched_at": time.time(),
+    }
+    try:
+        with open(_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except Exception:
+        pass
+    return data
 
 
 def get_crypto_news(max_items: int = 12) -> list[str]:

@@ -55,7 +55,7 @@ scp @SSH_ARGS (Join-Path $LOCAL_DIR "web\llms.txt")    "${SSH_TARGET}:/var/www/a
 # 2. Instalar dependencias nuevas si hacen falta
 Write-Host ""
 Write-Host "==> [2/5] Verificando dependencias..." -ForegroundColor Cyan
-ssh @SSH_ARGS $SSH_TARGET "cd $REMOTE_DIR && source venv/bin/activate && pip install openai atproto --quiet"
+ssh @SSH_ARGS $SSH_TARGET "cd $REMOTE_DIR && source venv/bin/activate && pip install openai atproto xai-sdk --quiet"
 
 # 3. Verificar sintaxis
 Write-Host ""

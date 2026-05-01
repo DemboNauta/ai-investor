@@ -11,17 +11,15 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from openai import OpenAI
-from config import XAI_API_KEY, XAI_BASE_URL, MODEL
+from config import XAI_API_KEY, XAI_BASE_URL, MODEL, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL
 from profiles import PROFILES
 import memory as mem
 import portfolio as pf
 import data as market_data
 import requests as _req
-from agent import _FETCH_NEWS_TOOL, _GET_COIN_DETAILS_TOOL
+from agent import _FETCH_NEWS_TOOL, _GET_COIN_DETAILS_TOOL, _to_responses_tool, _to_xai_tool
 import subscribers
 import notifier
-
-client = OpenAI(api_key=XAI_API_KEY, base_url=XAI_BASE_URL)
 
 PORT = int(os.getenv("CHAT_PORT", "5001"))
 RATE_LIMIT = 5        # max requests
@@ -46,6 +44,13 @@ def _init_db():
             ts      TEXT    NOT NULL DEFAULT (datetime('now'))
         )
     """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS chat_state (
+            profile     TEXT PRIMARY KEY,
+            response_id TEXT,
+            updated_ts  TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
     con.commit()
     con.close()
 
@@ -60,16 +65,35 @@ def _load_history(profile: str) -> list[dict]:
     return [{"role": r, "content": c} for r, c in reversed(rows)]
 
 
-def _save_messages(profile: str, user_msg: str, assistant_msg: str):
+def _save_messages(profile: str, user_msg: str, assistant_msg: str, response_id: str = None):
     con = sqlite3.connect(DB_PATH)
-    con.execute(
-        "INSERT INTO messages (profile, role, content) VALUES (?, 'user', ?)",
-        (profile, user_msg),
-    )
-    con.execute(
-        "INSERT INTO messages (profile, role, content) VALUES (?, 'assistant', ?)",
-        (profile, assistant_msg),
-    )
+    con.execute("INSERT INTO messages (profile, role, content) VALUES (?, 'user', ?)", (profile, user_msg))
+    con.execute("INSERT INTO messages (profile, role, content) VALUES (?, 'assistant', ?)", (profile, assistant_msg))
+    if response_id:
+        con.execute(
+            "INSERT INTO chat_state (profile, response_id, updated_ts) VALUES (?, ?, datetime('now')) "
+            "ON CONFLICT(profile) DO UPDATE SET response_id=excluded.response_id, updated_ts=excluded.updated_ts",
+            (profile, response_id),
+        )
+    con.commit()
+    con.close()
+
+
+def _get_last_response_id(profile: str) -> str | None:
+    con = sqlite3.connect(DB_PATH)
+    row = con.execute(
+        # Only reuse if updated within last 30 minutes (OpenAI TTL safe window)
+        "SELECT response_id FROM chat_state WHERE profile=? "
+        "AND updated_ts > datetime('now', '-30 minutes')",
+        (profile,),
+    ).fetchone()
+    con.close()
+    return row[0] if row else None
+
+
+def _clear_response_id(profile: str):
+    con = sqlite3.connect(DB_PATH)
+    con.execute("UPDATE chat_state SET response_id=NULL WHERE profile=?", (profile,))
     con.commit()
     con.close()
 
@@ -83,6 +107,24 @@ def _check_rate_limit(ip: str) -> bool:
         return False
     _rate_buckets[ip].append(now)
     return True
+
+
+def _build_prices_summary() -> str:
+    """Compact live price table from disk cache (no extra API calls)."""
+    try:
+        md = market_data.get_all_market_data_cached()
+        coins = md.get("coins", [])
+        lines = ["LIVE PRICES (EUR) — top 50 by market cap:"]
+        for c in coins:
+            chg24 = c.get("price_change_percentage_24h_in_currency")
+            chg24_str = f"{chg24:+.1f}%" if chg24 is not None else "n/a"
+            lines.append(f"  {c['id']:<22} €{c['current_price']:<14.4f} 24h: {chg24_str}")
+        fg = md.get("fear_greed", {})
+        if fg.get("value") is not None:
+            lines.append(f"Fear & Greed: {fg['value']}/100 ({fg['label']})")
+        return "\n".join(lines)
+    except Exception:
+        return ""
 
 
 def _build_context(profile_key: str) -> str:
@@ -114,6 +156,8 @@ def _build_context(profile_key: str) -> str:
         )
     trades_str = "\n".join(trade_lines) if trade_lines else "  (none yet)"
 
+    prices_summary = _build_prices_summary()
+
     return f"""{profile['system_prompt']}
 {memory_prompt}
 
@@ -127,6 +171,8 @@ Holdings:
 Recent trades (last 15):
 {trades_str}
 ---------------------
+
+{prices_summary}
 
 You are now in CHAT MODE. A human is asking you questions about your portfolio, \
 decisions, strategy, or the market. You cannot execute trades here — this is Q&A only.
@@ -143,10 +189,20 @@ Moderate = calm and measured. Aggressive = confident and decisive. Degen = bold 
 
 TOOLS AVAILABLE IN CHAT:
 - fetch_news([keyword]): Get latest crypto headlines. Use when asked about news or sentiment.
-- get_coin_details(coin_id): Deep data on a specific coin. Use when asked about a specific coin."""
+- get_coin_details(coin_id): Deep dev/community data on a specific coin."""
 
 
 _CHAT_TOOLS = [_FETCH_NEWS_TOOL, _GET_COIN_DETAILS_TOOL]
+_CHAT_TOOLS_RESPONSES = [_to_responses_tool(t) for t in _CHAT_TOOLS]
+
+
+def _make_chat_client(profile_key: str):
+    """Returns (client, model, provider) for the given profile."""
+    provider = PROFILES.get(profile_key, {}).get("provider", "xai")
+    if provider == "openai":
+        return OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL), OPENAI_MODEL, "openai"
+    from xai_sdk import Client as _XAIClient
+    return _XAIClient(api_key=XAI_API_KEY), MODEL, "xai"
 
 
 def _exec_tool(fn: str, args: dict) -> str:
@@ -174,8 +230,14 @@ def _exec_tool(fn: str, args: dict) -> str:
             cats = ", ".join((d.get("categories") or [])[:5])
             dev = d.get("developer_data", {})
             comm = d.get("community_data", {})
+            mkt = d.get("market_data", {})
+            price_eur = mkt.get("current_price", {}).get("eur")
+            chg24 = mkt.get("price_change_percentage_24h")
+            price_str = f"€{price_eur:.4f}" if price_eur else "n/a"
+            chg_str = f"{chg24:+.2f}%" if chg24 is not None else "n/a"
             return (
                 f"COIN: {d.get('name')} ({d.get('symbol', '').upper()})\n"
+                f"Current price: {price_str} (24h: {chg_str})\n"
                 f"Description: {desc}...\n"
                 f"Categories: {cats}\n"
                 f"GitHub stars: {dev.get('stars', 'n/a')} | Forks: {dev.get('forks', 'n/a')} | "
@@ -192,34 +254,115 @@ def _exec_tool(fn: str, args: dict) -> str:
 def _handle_chat(profile_key: str, user_msg: str) -> str:
     if profile_key not in PROFILES:
         return "Unknown profile."
-    system = _build_context(profile_key)
+
+    llm_client, model, provider = _make_chat_client(profile_key)
+    system_prompt = _build_context(profile_key)
     history = _load_history(profile_key)
-    messages = [{"role": "system", "content": system}] + history + [{"role": "user", "content": user_msg}]
+    prev_id = _get_last_response_id(profile_key)
+
+    if provider == "openai":
+        answer, new_id = _handle_chat_openai(llm_client, model, system_prompt, history, user_msg, prev_id)
+    else:
+        answer, new_id = _handle_chat_xai(llm_client, model, system_prompt, history, user_msg, prev_id)
+
+    _save_messages(profile_key, user_msg, answer, response_id=new_id)
+    return answer
+
+
+def _handle_chat_openai(oai_client, model: str, system_prompt: str, history: list,
+                        user_msg: str, prev_id: str | None) -> tuple[str, str | None]:
+    """OpenAI Responses API — stateful across turns via previous_response_id."""
+    if prev_id:
+        # Continue existing conversation — only send the new user message
+        try:
+            response = oai_client.responses.create(
+                model=model,
+                input=[{"role": "user", "content": user_msg}],
+                previous_response_id=prev_id,
+                tools=_CHAT_TOOLS_RESPONSES,
+                max_output_tokens=800,
+            )
+        except Exception:
+            # ID expired or invalid — fall back to full history
+            prev_id = None
+
+    if not prev_id:
+        input_msgs = [{"role": m["role"], "content": m["content"]} for m in history]
+        input_msgs.append({"role": "user", "content": user_msg})
+        response = oai_client.responses.create(
+            model=model,
+            instructions=system_prompt,
+            input=input_msgs,
+            tools=_CHAT_TOOLS_RESPONSES,
+            max_output_tokens=800,
+        )
 
     for _ in range(8):
-        resp = client.chat.completions.create(
-            model=MODEL,
-            messages=messages,
-            tools=_CHAT_TOOLS,
-            tool_choice="auto",
-            max_tokens=800,
+        tool_calls = [item for item in response.output if item.type == "function_call"]
+        if not tool_calls:
+            break
+        tool_outputs = []
+        for item in tool_calls:
+            result = _exec_tool(item.name, json.loads(item.arguments))
+            tool_outputs.append({"type": "function_call_output", "call_id": item.call_id, "output": result})
+        response = oai_client.responses.create(
+            model=model,
+            input=tool_outputs,
+            previous_response_id=response.id,
+            tools=_CHAT_TOOLS_RESPONSES,
+            max_output_tokens=800,
         )
-        msg = resp.choices[0].message
-        messages.append(msg)
 
-        if not msg.tool_calls:
-            answer = msg.content or ""
-            _save_messages(profile_key, user_msg, answer)
-            return answer
+    for item in response.output:
+        if item.type == "message":
+            for c in item.content:
+                if hasattr(c, "text"):
+                    return c.text, response.id
+    return "Error: no response.", None
 
-        tool_results = []
-        for tc in msg.tool_calls:
-            args = json.loads(tc.function.arguments)
-            result = _exec_tool(tc.function.name, args)
-            tool_results.append({"role": "tool", "tool_call_id": tc.id, "content": result})
-        messages.extend(tool_results)
 
-    return "Error: no response after tool calls."
+def _handle_chat_xai(xai_client, model: str, system_prompt: str, history: list,
+                     user_msg: str, prev_id: str | None) -> tuple[str, str | None]:
+    """xAI SDK — stateful across turns via previous_response_id."""
+    from xai_sdk.chat import user as _user, system as _system, assistant as _assistant, tool_result as _tr
+
+    tools_x = [_to_xai_tool(t) for t in _CHAT_TOOLS]
+
+    if prev_id:
+        try:
+            chat = xai_client.chat.create(
+                model=model, store_messages=True,
+                previous_response_id=prev_id, tools=tools_x,
+            )
+            chat.append(_user(user_msg))
+            response = chat.sample()
+        except Exception:
+            prev_id = None
+
+    if not prev_id:
+        chat = xai_client.chat.create(model=model, store_messages=True, tools=tools_x)
+        chat.append(_system(system_prompt))
+        for m in history:
+            if m["role"] == "user":
+                chat.append(_user(m["content"]))
+            elif m["role"] == "assistant":
+                chat.append(_assistant(m["content"]))
+        chat.append(_user(user_msg))
+        response = chat.sample()
+
+    for _ in range(8):
+        if not response.tool_calls:
+            break
+        next_chat = xai_client.chat.create(
+            model=model, store_messages=True,
+            previous_response_id=response.id, tools=tools_x,
+        )
+        for tc in response.tool_calls:
+            result = _exec_tool(tc.function.name, json.loads(tc.function.arguments))
+            next_chat.append(_tr(result, tool_call_id=tc.id))
+        response = next_chat.sample()
+
+    return response.content or "Error: no response.", response.id
 
 
 class ChatHandler(BaseHTTPRequestHandler):

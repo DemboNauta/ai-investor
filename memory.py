@@ -2,7 +2,7 @@ import re
 import os
 from datetime import datetime, timezone
 
-INJECT_TOP_N = 15
+INJECT_TOP_N = 8
 SUMMARIZE_THRESHOLD = 25
 KEEP_RECENT_AFTER_SUMMARY = 10
 

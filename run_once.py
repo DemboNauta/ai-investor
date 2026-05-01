@@ -20,7 +20,9 @@ from profiles import PROFILES
 def _make_client(provider: str):
     if provider == "openai":
         return OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL), OPENAI_MODEL
-    return OpenAI(api_key=XAI_API_KEY, base_url=XAI_BASE_URL), MODEL
+    # xAI: use native SDK for stateful Responses API
+    from xai_sdk import Client as _XAIClient
+    return _XAIClient(api_key=XAI_API_KEY), MODEL
 
 PYTHON = r"C:\Users\edgar\AppData\Local\Programs\Python\Python310\python.exe"
 
@@ -128,13 +130,13 @@ def main(profile_key: str = "moderate"):
     print(f"[{datetime.now(timezone.utc).isoformat()}] [{profile['name']}] Cycle start")
 
     try:
-        coins = market_data.get_market_data(limit=50)
-        coins = market_data.enrich_with_indicators(coins)
-        fear_greed = market_data.get_fear_greed()
-        global_mkt = market_data.get_global_market()
-        trending = market_data.get_trending()
-        funding_rates = market_data.get_funding_rates()
-        macro = market_data.get_macro_context()
+        md = market_data.get_all_market_data_cached()
+        coins = md["coins"]
+        fear_greed = md["fear_greed"]
+        global_mkt = md["global_market"]
+        trending = md["trending"]
+        funding_rates = md["funding_rates"]
+        macro = md["macro"]
     except Exception as e:
         print(f"Market data error: {e}")
         return
@@ -171,7 +173,8 @@ def main(profile_key: str = "moderate"):
         coin_stats=coin_stats,
         current_cycle=cycle,
     )
-    full_system_prompt = profile["system_prompt"] + memory_prompt
+    # market_text first → identical prefix across same-provider agents → LLM prefix cache hit
+    full_system_prompt = "LIVE MARKET DATA:\n" + market_text + "\n\n" + profile["system_prompt"] + memory_prompt
 
     value_before = pf.get_total_value(portfolio, prices)
 
@@ -180,6 +183,7 @@ def main(profile_key: str = "moderate"):
         portfolio, trade_log, summary, activity_log, in_cycle_memories = agent.run_cycle(
             portfolio, market_text, prices, system_prompt=full_system_prompt, mem=profile_memory,
             llm_client=llm_client, llm_model=llm_model,
+            provider=profile.get("provider", "xai"),
         )
     except Exception as e:
         traceback.print_exc()
@@ -215,35 +219,39 @@ def main(profile_key: str = "moderate"):
     if in_cycle_memories:
         print(f"  [{profile['name']}] {len(in_cycle_memories)} in-cycle memory/memories saved")
 
-    # Post-cycle reflection
-    print(f"  [{profile['name']}] Running post-cycle reflection...")
-    try:
-        reflection_memories, reflection_thesis = agent.run_reflection(
-            profile_name=profile["name"],
-            system_prompt=profile["system_prompt"],
-            cycle=cycle,
-            trade_log=trade_log,
-            summary=summary,
-            value_before=value_before,
-            value_after=value_after,
-            memory_prompt=memory_prompt,
-            llm_client=llm_client,
-            llm_model=llm_model,
-        )
-        delta_pct = ((value_after - value_before) / value_before * 100) if value_before else 0
-        for m in reflection_memories:
-            mem.add_entry(
-                profile_memory, m["content"], m["category"], cycle,
-                m["importance"], pnl_pct=delta_pct,
-                regime=current_regime_label, fear_greed=fg_val, btc_dominance=btcd,
+    # Post-cycle reflection — skip if no trades (saves ~1 LLM call per idle cycle)
+    reflection_memories, reflection_thesis = [], ""
+    if not trade_log:
+        print(f"  [{profile['name']}] No trades — skipping reflection.")
+    else:
+        try:
+            reflection_memories, reflection_thesis = agent.run_reflection(
+                profile_name=profile["name"],
+                system_prompt=profile["system_prompt"],
+                cycle=cycle,
+                trade_log=trade_log,
+                summary=summary,
+                value_before=value_before,
+                value_after=value_after,
+                memory_prompt=memory_prompt,
+                llm_client=llm_client,
+                llm_model=llm_model,
+                provider=profile.get("provider", "xai"),
             )
-        if reflection_thesis:
-            mem.update_thesis(profile_memory, reflection_thesis)
-            print(f"  [{profile['name']}] Thesis updated: {reflection_thesis[:80]}")
-        if reflection_memories:
-            print(f"  [{profile['name']}] {len(reflection_memories)} reflection memory/memories saved")
-    except Exception as e:
-        print(f"  [{profile['name']}] Reflection error: {e}")
+            delta_pct = ((value_after - value_before) / value_before * 100) if value_before else 0
+            for m in reflection_memories:
+                mem.add_entry(
+                    profile_memory, m["content"], m["category"], cycle,
+                    m["importance"], pnl_pct=delta_pct,
+                    regime=current_regime_label, fear_greed=fg_val, btc_dominance=btcd,
+                )
+            if reflection_thesis:
+                mem.update_thesis(profile_memory, reflection_thesis)
+                print(f"  [{profile['name']}] Thesis updated: {reflection_thesis[:80]}")
+            if reflection_memories:
+                print(f"  [{profile['name']}] {len(reflection_memories)} reflection memory/memories saved")
+        except Exception as e:
+            print(f"  [{profile['name']}] Reflection error: {e}")
 
     profile_memory["cycles_reflected"] = profile_memory.get("cycles_reflected", 0) + 1
 
@@ -258,6 +266,7 @@ def main(profile_key: str = "moderate"):
                 raw_entries_text=raw_text,
                 llm_client=llm_client,
                 llm_model=llm_model,
+                provider=profile.get("provider", "xai"),
             )
             mem.prune_after_summarization(profile_memory)
             for s in summaries:
