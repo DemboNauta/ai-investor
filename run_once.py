@@ -142,6 +142,22 @@ def main(profile_key: str = "moderate"):
         return
 
     prices = {c["id"]: c["current_price"] for c in coins}
+
+    # Fetch prices for held coins not in top-50 (e.g. rank 51+ drops off the list)
+    _portfolio_preview = pf.load(profile["portfolio_file"])
+    _missing = [cid for cid in _portfolio_preview.get("holdings", {}) if cid not in prices]
+    if _missing:
+        try:
+            import urllib.request as _ur
+            _url = ("https://api.coingecko.com/api/v3/coins/markets"
+                    f"?vs_currency=eur&ids={','.join(_missing)}&order=market_cap_desc&per_page=50&page=1")
+            with _ur.urlopen(_url, timeout=10) as _r:
+                for _c in __import__("json").load(_r):
+                    prices[_c["id"]] = _c["current_price"]
+            print(f"Fetched extra prices for: {_missing}")
+        except Exception as _e:
+            print(f"Warning: could not fetch prices for held coins {_missing}: {_e}")
+
     market_text = market_data.format_market_data_for_llm(
         coins, fear_greed,
         global_market=global_mkt,
