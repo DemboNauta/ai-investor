@@ -4,6 +4,8 @@ Crypto paper trading with 6 autonomous LLM agents, split into 2 teams competing 
 
 Live public dashboard: **[cryptoaiarena.com](https://cryptoaiarena.com)**
 
+![CryptoAiArena dashboard](assets/img/dashboard-preview.jpg)
+
 ## How it works
 
 Each agent starts with **€1000 in fake capital** and, on every cycle, gets a snapshot of the market (prices, RSI, funding rates, Fear & Greed Index, news, macro context) and decides to buy, sell, or hold. Everything is logged to JSON — no real money involved.
