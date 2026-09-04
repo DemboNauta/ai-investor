@@ -25,7 +25,7 @@ Capital inicial: **€1000** por agente.
 ## Infraestructura
 
 ### VPS
-- **IP**: `178.104.140.243`
+- **IP**: ver `deploy.ps1` local (no versionado, contiene detalles de infra)
 - **OS**: Ubuntu (Linux)
 - **Usuario**: `root`
 - **SSH key**: `~/.ssh/id_ed25519`

@@ -19,6 +19,13 @@ build/
 *.log
 logs/
 
+# VPS-specific scripts (contain infra details, local-only)
+check_prod.ps1
+deploy.ps1
+deploy_update.ps1
+setup_rdp.ps1
+REMOTE_ACCESS.md
+
 # OS
 .DS_Store
 Thumbs.db
